@@ -784,6 +784,9 @@ impl QuickSettings {
     }
 
     fn refresh_notifications(self: &Rc<Self>) {
+        if !self.cfg.notifications {
+            return;
+        }
         let daemon = crate::service::notification::get();
         let notifications = daemon.visible();
         let _deferred = daemon.deferred_count();
