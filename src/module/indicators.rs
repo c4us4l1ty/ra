@@ -65,7 +65,7 @@ impl Indicator {
     /// arrives looks broken on a slow machine.
     fn paint(&self, fetch: &dyn Fn() -> (&'static str, String)) {
         let (icon, text) = fetch();
-        self.image.set_icon_name(Some(icon));
+        crate::icons::set(&self.image, icon);
         self.label.set_text(&text);
         self.label.set_visible(self.show_label);
         self.button.set_tooltip_text(Some(&text));
@@ -76,8 +76,13 @@ impl Indicator {
     }
 }
 
-/// Bind an indicator to a service stream. Returns the subscription so the
-/// caller can keep it alive for as long as the widget.
+/// Bind an indicator to a service stream.
+///
+/// The subscription is handed to [`crate::module::keep`], which parks it with
+/// the panel window that owns the widget. Discarding it here would unsubscribe
+/// immediately and freeze the indicator on the value it had when it was built -
+/// which is exactly what `let _ = subscribe(..)` used to do, leaving every
+/// indicator in the bar showing its construction-time fallback.
 fn bind<T: 'static>(
     indicator: &Indicator,
     fetch: impl Fn() -> (&'static str, String) + 'static,
@@ -88,13 +93,13 @@ fn bind<T: 'static>(
     let image = indicator.image.clone();
     let label = indicator.label.clone();
     let show_label = indicator.show_label;
-    let _ = subscribe(Box::new(move |_| {
+    crate::module::keep(subscribe(Box::new(move |_| {
         let (icon, text) = fetch();
-        image.set_icon_name(Some(icon));
+        crate::icons::set(&image, icon);
         label.set_text(&text);
         label.set_visible(show_label);
         button.set_tooltip_text(Some(&text));
-    }));
+    })));
 }
 
 // -- network -----------------------------------------------------------------
@@ -110,7 +115,7 @@ pub fn network(spec: &ModuleSpec) -> Option<gtk4::Widget> {
             (s.icon(), s.label())
         }
     };
-    let _keep = bind(&indicator, fetch, move |handler| net.on_change(handler));
+    bind(&indicator, fetch, move |handler| net.on_change(handler));
     Some(indicator.finish())
 }
 
@@ -126,7 +131,7 @@ pub fn bluetooth(spec: &ModuleSpec) -> Option<gtk4::Widget> {
             (s.icon(), s.label())
         }
     };
-    let _keep = bind(&indicator, fetch, move |handler| bt.on_change(handler));
+    bind(&indicator, fetch, move |handler| bt.on_change(handler));
     Some(indicator.finish())
 }
 
@@ -147,7 +152,7 @@ pub fn volume(spec: &ModuleSpec) -> Option<gtk4::Widget> {
             }
         }
     };
-    let _keep = bind(&indicator, fetch, {
+    bind(&indicator, fetch, {
         let audio = audio.clone();
         move |handler| audio.on_change(handler)
     });
@@ -177,7 +182,7 @@ pub fn brightness(spec: &ModuleSpec) -> Option<gtk4::Widget> {
             (s.icon(), s.label())
         }
     };
-    let _keep = bind(&indicator, fetch, move |handler| bright.on_change(handler));
+    bind(&indicator, fetch, move |handler| bright.on_change(handler));
     Some(indicator.finish())
 }
 
@@ -193,7 +198,7 @@ pub fn battery(spec: &ModuleSpec) -> Option<gtk4::Widget> {
             (s.icon(), s.label())
         }
     };
-    let _keep = bind(&indicator, fetch, move |handler| power.on_battery_change(handler));
+    bind(&indicator, fetch, move |handler| power.on_battery_change(handler));
     Some(indicator.finish())
 }
 
@@ -209,14 +214,14 @@ pub fn power_profile(spec: &ModuleSpec) -> Option<gtk4::Widget> {
             (s.icon(), s.label())
         }
     };
-    let _keep = bind(&indicator, fetch, {
+    bind(&indicator, fetch, {
         let power = power.clone();
         move |handler| power.on_profile_change(handler)
     });
 
     // Only offer to switch when there is something to switch to.
     let button = indicator.button.clone();
-    power.on_profile_change(move |s| button.set_sensitive(s.profiles.len() > 1));
+    crate::module::keep(power.on_profile_change(move |s| button.set_sensitive(s.profiles.len() > 1)));
 
     Some(indicator.finish())
 }
@@ -293,7 +298,7 @@ pub fn aggregate(spec: &ModuleSpec) -> Option<gtk4::Widget> {
     // a single signal can carry changes for more than one indicator.
     // One subscription per service. Each gets its own copy of the row because
     // a single signal can carry a change for any of these indicators.
-    let _keep: Vec<Subscription> = vec![
+    crate::module::keep_all(vec![
         service::network::get().on_change({
             let owned = entries.clone();
             move |_| repaint(&owned)
@@ -318,7 +323,7 @@ pub fn aggregate(spec: &ModuleSpec) -> Option<gtk4::Widget> {
             let owned = entries.clone();
             move |_| repaint(&owned)
         }),
-    ];
+    ]);
 
     debug!("quick-settings aggregate with {} indicator(s)", entries.len());
     Some(button.upcast())
@@ -327,7 +332,7 @@ pub fn aggregate(spec: &ModuleSpec) -> Option<gtk4::Widget> {
 fn repaint(entries: &[(gtk4::Image, gtk4::Label, String)]) {
     for (image, label, name) in entries {
         let (icon, text) = lookup(name);
-        image.set_icon_name(Some(icon));
+        crate::icons::set(&image, icon);
         label.set_text(&text);
     }
 }

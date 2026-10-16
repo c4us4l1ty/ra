@@ -8,6 +8,15 @@
  * Only the *shape* is defined here — radii, spacing, borders, opacity. That
  * separation is what makes a light/dark switch work without the panel
  * hard-coding a palette that would fight the user's theme.
+ *
+ * No `font-family` anywhere, on purpose. ra ships no fonts and should never
+ * name one: the panel uses whatever the active GTK theme uses (Adwaita Sans on
+ * a default Fedora install), so it looks like the rest of the desktop instead
+ * of like a separate application that happens to be floating over it. Naming a
+ * font the user has not installed falls back to whatever the theme picked,
+ * which is the same result but via a warning-free accident rather than on
+ * purpose. `font-size` and `font-weight` are fine; they are relative to
+ * whatever the theme chose.
  */
 
 /* ---------------------------------------------------------------- panels -- */
@@ -69,7 +78,7 @@ window.ra-panel {
 }
 
 .ra-bar-button:checked {
-  background-color: alpha(@accent_bg_color, 0.35);
+  background-color: alpha(@ra_accent, 0.35);
 }
 
 .ra-bar-label {
@@ -126,8 +135,8 @@ window.ra-popup {
 }
 
 .ra-round-button:checked {
-  background-color: @accent_bg_color;
-  color: @accent_fg_color;
+  background-color: @ra_accent;
+  color: @ra_accent_fg;
 }
 
 /* ----------------------------------------------------------------- tiles -- */
@@ -148,8 +157,8 @@ window.ra-popup {
 
 .ra-tile:checked,
 .ra-tile.checked {
-  background-color: @accent_bg_color;
-  color: @accent_fg_color;
+  background-color: @ra_accent;
+  color: @ra_accent_fg;
 }
 
 .ra-tile-title {
@@ -187,7 +196,7 @@ window.ra-popup {
 
 .ra-slider trough highlight {
   border-radius: 3px;
-  background-color: @accent_bg_color;
+  background-color: @ra_accent;
 }
 
 .ra-slider slider {
@@ -238,11 +247,11 @@ window.ra-popup {
 }
 
 .ra-list row:selected {
-  background-color: alpha(@accent_bg_color, 0.3);
+  background-color: alpha(@ra_accent, 0.3);
 }
 
 .ra-list row.connected {
-  background-color: alpha(@accent_bg_color, 0.22);
+  background-color: alpha(@ra_accent, 0.22);
 }
 
 .ra-empty {
@@ -279,7 +288,7 @@ window.ra-popup {
 }
 
 .ra-entry:focus {
-  border-color: @accent_bg_color;
+  border-color: @ra_accent;
 }
 
 /* --------------------------------------------------------------- scroll -- */

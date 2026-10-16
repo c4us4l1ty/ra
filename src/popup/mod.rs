@@ -161,9 +161,17 @@ impl QuickSettings {
 
         // The scroller wraps the stack, so a page taller than the screen still
         // scrolls. Only the stack goes in it - a widget can have one parent.
+        //
+        // `propagate_natural_height` is what lets the popup shrink to fit a
+        // short page. Without it the window would take the largest height any
+        // page ever needed, and a four-tile popup would sit on a slab of empty
+        // background with the tiles floating at the top.
         let scroller = gtk4::ScrolledWindow::new();
         scroller.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
         scroller.set_propagate_natural_height(true);
+        // Capped so a long list scrolls instead of running off the screen. The
+        // bound is the monitor, minus room for the surface's own margins.
+        scroller.set_max_content_height(self.max_page_height());
         scroller.add_css_class("ra-scroller");
         scroller.set_child(Some(&self.stack));
 
@@ -193,9 +201,27 @@ impl QuickSettings {
         *self.window.borrow_mut() = Some(window);
     }
 
+    /// The tallest a page may be before it starts scrolling.
+    ///
+    /// Derived from the monitor rather than hard-coded, so the popup fills a
+    /// 4K screen without being told to and still fits a 768-pixel laptop.
+    fn max_page_height(&self) -> i32 {
+        const MARGIN: i32 = 48;
+        const CEILING: i32 = 720;
+        // GTK4 dropped the primary-monitor concept, so this takes the first
+        // output the display reports - the same one the panels anchor to.
+        let screen = gtk4::gdk::Display::default()
+            .and_then(|d| d.monitors().item(0))
+            .and_then(|m| m.downcast::<gtk4::gdk::Monitor>().ok())
+            .map(|m| m.geometry().height())
+            .unwrap_or(CEILING + MARGIN);
+        (screen - MARGIN).clamp(240, CEILING)
+    }
+
     fn set_margins(&self, window: &gtk4::ApplicationWindow) {
+        // Size to the content, on every compositor. The scroller caps growth.
+        window.set_default_size(self.cfg.width as i32, -1);
         if !layer::supported() {
-            window.set_default_size(self.cfg.width as i32, 480);
             return;
         }
         let gap = self.cfg.gap as i32;
@@ -208,6 +234,14 @@ impl QuickSettings {
     }
 
     /// Called by the application once the anchor panel's geometry is known.
+    /// The popup window, once it has been built.
+    ///
+    /// Created lazily, so this is `None` until the popup has been opened at
+    /// least once. `ra --screenshot` opens it first.
+    pub fn window(&self) -> Option<gtk4::ApplicationWindow> {
+        self.window.borrow().clone()
+    }
+
     pub fn set_anchor_offset(&self, offset: i32) {
         self.anchor_offset.set(offset);
     }
@@ -334,6 +368,58 @@ impl QuickSettings {
                     tile.set_on(s);
                     tile.set_subtitle(if s { "Muted" } else { "Live" });
                 }
+                // The four tiles below are stateful too, and leaving them out is
+                // how the popup ends up contradicting itself: Wi-Fi shows a
+                // connected network while Airplane Mode claims to be on,
+                // because Airplane Mode was drawn once at build time, before
+                // NetworkManager had answered, and never redrawn. Anything that
+                // shows state has to be re-derived here, not only in its
+                // construction arm.
+                "airplane" => {
+                    // Airplane mode means both radios are down. It is not the
+                    // same as being offline: Wi-Fi on with Bluetooth off is a
+                    // perfectly normal state, and calling that "on" would make
+                    // the tile lie about a connection that is working.
+                    let wifi_on = net.state().wifi_enabled;
+                    let bluetooth_on = bt.state().powered;
+                    let on = !wifi_on && !bluetooth_on;
+                    tile.set_icon(if on {
+                        "network-offline-symbolic"
+                    } else {
+                        "network-wireless-symbolic"
+                    });
+                    tile.set_on(on);
+                    tile.set_subtitle(if on { "On" } else { "Off" });
+                }
+                "night-light" => {
+                    let s = service::nightlight::get(None, None);
+                    let state = s.state();
+                    tile.set_sensitive(state.available);
+                    tile.set_on(state.available && state.enabled);
+                    let subtitle = if !state.available {
+                        "Unavailable".to_string()
+                    } else if state.enabled {
+                        format!("{}K", state.temperature)
+                    } else {
+                        "Off".to_string()
+                    };
+                    tile.set_subtitle(&subtitle);
+                }
+                "dark-style" => {
+                    let on = self.persist.get_bool(state::KEY_DARK, false);
+                    tile.set_icon(if on {
+                        "weather-night-symbolic"
+                    } else {
+                        "weather-clear-day-symbolic"
+                    });
+                    tile.set_on(on);
+                    tile.set_subtitle(if on { "On" } else { "Off" });
+                }
+                "do-not-disturb" => {
+                    let on = self.persist.get_bool(state::KEY_DND, false);
+                    tile.set_on(on);
+                    tile.set_subtitle(if on { "On" } else { "Off" });
+                }
                 _ => {}
             }
         }
@@ -394,7 +480,7 @@ impl QuickSettings {
             ("applications-system-symbolic", "About ra", Some(Page::About)),
         ] {
             let b = ui::button(&["ra-round-button"]);
-            b.set_icon_name(icon_name);
+            crate::icons::set_on_button(&b, icon_name, 16);
             ui::tooltip(&b, tip);
             match target {
                 Some(page) => {
@@ -999,10 +1085,10 @@ fn add_passphrase_row(list: &gtk4::ListBox, anchor: &gtk4::ListBoxRow, ap: &Acce
     entry.set_valign(gtk4::Align::Center);
 
     let submit_button = ui::button(&["ra-round-button"]);
-    submit_button.set_icon_name("go-next-symbolic");
+    crate::icons::set_on_button(&submit_button, "go-next-symbolic", 16);
     ui::tooltip(&submit_button, "Connect");
     let cancel_button = ui::button(&["ra-round-button"]);
-    cancel_button.set_icon_name("window-close-symbolic");
+    crate::icons::set_on_button(&cancel_button, "window-close-symbolic", 16);
     ui::tooltip(&cancel_button, "Cancel");
 
     let row = ui::hbox(8);
@@ -1341,10 +1427,10 @@ impl SessionPage {
         self.confirm.append(&text);
 
         let yes = ui::button(&["ra-round-button"]);
-        yes.set_icon_name("emblem-ok-symbolic");
+        crate::icons::set_on_button(&yes, "emblem-ok-symbolic", 16);
         ui::tooltip(&yes, "Confirm");
         let no = ui::button(&["ra-round-button"]);
-        no.set_icon_name("window-close-symbolic");
+        crate::icons::set_on_button(&no, "window-close-symbolic", 16);
         ui::tooltip(&no, "Cancel");
         self.confirm.append(&no);
         self.confirm.append(&yes);

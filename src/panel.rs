@@ -21,11 +21,24 @@ use crate::{debug, info, warn};
 /// A live panel window, kept so a config reload can destroy it.
 pub struct PanelWindow {
     pub window: gtk4::ApplicationWindow,
+    /// The service subscriptions belonging to the widgets in this window.
+    ///
+    /// Held here, next to the widgets they update, so that destroying the
+    /// window unsubscribes them. Letting a module create a listener and drop it
+    /// on the spot is what froze the whole bar; letting it leak instead would
+    /// mean every config reload left another generation of listeners writing to
+    /// widgets nobody can see.
+    subs: Vec<crate::dbus::Subscription>,
 }
 
 impl PanelWindow {
     pub fn destroy(&self) {
+        debug!("tearing down a panel with {} service subscription(s)", self.subs.len());
         self.window.destroy();
+        // The subscriptions fall with this struct, so the listeners stop
+        // exactly when the widgets they write to stop existing. A reload
+        // therefore cannot leave the previous generation still repainting
+        // widgets nobody can see.
     }
 }
 
@@ -103,7 +116,7 @@ fn build_one(
     let surface = ui::hbox(0);
     surface.add_css_class("ra-panel-surface");
 
-    build_sections(&surface, panel, config);
+    let subs = build_sections(&surface, panel, config);
 
     window.set_child(Some(&surface));
 
@@ -121,7 +134,7 @@ fn build_one(
         }
     }
 
-    Rc::new(PanelWindow { window })
+    Rc::new(PanelWindow { window, subs })
 }
 
 /// Lay out `left`, `center` and `right`.
@@ -129,7 +142,7 @@ fn build_one(
 /// The centre section is what makes a clock sit in the middle of a wide bar
 /// rather than next to the left-hand widgets, so it is given the free space
 /// while the outer sections shrink-wrap their contents.
-fn build_sections(surface: &gtk4::Box, panel: &Panel, config: &Config) {
+fn build_sections(surface: &gtk4::Box, panel: &Panel, config: &Config) -> Vec<crate::dbus::Subscription> {
     let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
     row.add_css_class("ra-panel-row");
     if panel.edge == Edge::Left || panel.edge == Edge::Right {
@@ -141,18 +154,23 @@ fn build_sections(surface: &gtk4::Box, panel: &Panel, config: &Config) {
     let center = build_section(panel, &config.include, &panel.center, Align::Center);
     let right = build_section(panel, &config.include, &panel.right, Align::End);
 
-    if let Some(left) = &left {
-        row.append(left);
+    let mut subs = Vec::new();
+    if let Some((left, part)) = left {
+        row.append(&left);
+        subs.extend(part);
     }
-    if let Some(center) = &center {
+    if let Some((center, part)) = center {
         // The centre section absorbs the free space, which is what pins it to
         // the middle of the bar.
         center.set_hexpand(true);
-        row.append(center);
+        row.append(&center);
+        subs.extend(part);
     }
-    if let Some(right) = &right {
-        row.append(right);
+    if let Some((right, part)) = right {
+        row.append(&right);
+        subs.extend(part);
     }
+    subs
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -162,12 +180,15 @@ enum Align {
     End,
 }
 
+/// A section box, and the subscriptions of the modules inside it.
+type Section = (gtk4::Box, Vec<crate::dbus::Subscription>);
+
 fn build_section(
     panel: &Panel,
     includes: &std::collections::BTreeMap<String, Vec<Slot>>,
     slots: &[Slot],
     align: Align,
-) -> Option<gtk4::Box> {
+) -> Option<Section> {
     let slots = Config::expand_slots(slots, includes);
     if slots.is_empty() {
         return None;
@@ -199,12 +220,14 @@ fn build_section(
         });
     }
 
+    let mut subs = Vec::new();
     for slot in slots {
         match slot {
             Slot::Module(reference) => {
                 let spec = reference.spec();
-                if let Some(widget) = module::build(&spec.module, &spec) {
-                    section.append(&widget);
+                if let Some(built) = module::build(&spec.module, &spec) {
+                    section.append(&built.widget);
+                    subs.extend(built.subs);
                 }
             }
             Slot::Group(group) => {
@@ -225,8 +248,9 @@ fn build_section(
                 let inner: Vec<crate::config::ModuleRef> = group.modules.clone();
                 for entry in inner {
                     let spec = entry.spec();
-                    if let Some(widget) = module::build(&spec.module, &spec) {
-                        container.append(&widget);
+                    if let Some(built) = module::build(&spec.module, &spec) {
+                        container.append(&built.widget);
+                        subs.extend(built.subs);
                     }
                 }
                 // An empty group would render as a zero-width gap; drop it.
@@ -237,7 +261,7 @@ fn build_section(
         }
     }
 
-    Some(section)
+    Some((section, subs))
 }
 
 /// Distance from the screen edge to where the popup should start, i.e. the

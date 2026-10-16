@@ -540,6 +540,7 @@ dependencies = [
 name = "ra"
 version = "0.1.0"
 dependencies = [
+ "gsk4",
  "gtk4",
  "gtk4-layer-shell",
  "serde",

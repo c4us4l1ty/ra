@@ -19,6 +19,9 @@ gtk4 = { version = "0.11", features = ["v4_12"] }
 gtk4-layer-shell = "0.8"
 serde = { version = "1", features = ["derive"] }
 toml = { version = "0.9", default-features = false, features = ["parse", "serde", "std"] }
+# Already compiled in as part of gtk4's own tree; listed directly only so the
+# renderer can turn a widget tree into a PNG for `ra --screenshot`.
+gsk4 = "0.11"
 
 [profile.release]
 opt-level = 3

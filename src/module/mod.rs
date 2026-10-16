@@ -25,8 +25,51 @@ pub mod basic;
 pub mod clock;
 pub mod indicators;
 
+/// A built module: the widget, and the subscriptions that keep it current.
+///
+/// The subscriptions are handed back rather than kept inside the module on
+/// purpose. A module constructor that created a listener and let it fall out of
+/// scope would unsubscribe the instant it returned, and the panel would sit
+/// there showing whatever the widget happened to contain at that instant. That
+/// is not hypothetical: every indicator in the bar was frozen on its
+/// construction-time fallback icon - `battery-missing`, `network-offline` -
+/// while the quick settings next to it showed live data, because the listeners
+/// were being dropped the moment each module finished building.
+///
+/// The caller owns them, and drops them with the widgets they update.
+pub struct Built {
+    pub widget: gtk4::Widget,
+    pub subs: Vec<crate::dbus::Subscription>,
+}
+
+thread_local! {
+    /// Subscriptions registered while a module is being built.
+    ///
+    /// Collecting here rather than threading a `&mut Vec` through thirteen
+    /// constructors keeps every module's signature about what it *builds*.
+    /// `build` drains this on entry and on exit, so nothing leaks between
+    /// modules and a failed build discards what it collected.
+    static PENDING: std::cell::RefCell<Vec<crate::dbus::Subscription>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Hand several subscriptions over at once.
+pub fn keep_all(subscriptions: Vec<crate::dbus::Subscription>) {
+    PENDING.with(|pending| pending.borrow_mut().extend(subscriptions));
+}
+
+/// Hand a subscription to whoever is building this module.
+///
+/// Call this instead of binding a subscription to a local: a local is dropped
+/// when the constructor returns, which silently disables the update.
+pub fn keep(subscription: crate::dbus::Subscription) {
+    PENDING.with(|pending| pending.borrow_mut().push(subscription));
+}
+
 /// Build one module. `None` means "unknown module name".
-pub fn build(name: &str, spec: &ModuleSpec) -> Option<gtk4::Widget> {
+pub fn build(name: &str, spec: &ModuleSpec) -> Option<Built> {
+    // Discard anything a previous, aborted build left behind.
+    let _ = take_pending();
     let widget = match name {
         // Passive.
         "label" => basic::label(spec),
@@ -49,7 +92,12 @@ pub fn build(name: &str, spec: &ModuleSpec) -> Option<gtk4::Widget> {
 
         _ => return None,
     }?;
-    Some(wrap(widget, spec))
+    Some(Built { widget: wrap(widget, spec), subs: take_pending() })
+}
+
+/// Drain the subscriptions registered while building.
+fn take_pending() -> Vec<crate::dbus::Subscription> {
+    PENDING.with(|pending| std::mem::take(&mut *pending.borrow_mut()))
 }
 
 /// Apply the slot's CSS classes.

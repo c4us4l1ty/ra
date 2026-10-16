@@ -8,8 +8,13 @@
 use gtk4::prelude::*;
 
 /// A symbolic icon, sized in pixels.
+/// An image from a symbolic icon name.
+///
+/// The name is resolved against the live icon theme first, so a name the
+/// installed theme does not have falls back to something drawable rather than
+/// becoming a broken-image box. See [`crate::icons`].
 pub fn icon(name: &str, size: i32) -> gtk4::Image {
-    gtk4::Image::builder().icon_name(name).pixel_size(size).build()
+    crate::icons::image(name, size)
 }
 
 /// A borderless, flat button that behaves like a menu item.
@@ -97,7 +102,7 @@ impl Tile {
     }
 
     pub fn set_icon(&self, name: &str) {
-        self.icon.set_icon_name(Some(name));
+        crate::icons::set(&self.icon, name);
     }
 
     pub fn set_title(&self, text: &str) {
@@ -171,7 +176,7 @@ impl SliderRow {
     }
 
     pub fn set_icon(&self, name: &str) {
-        self.icon.set_icon_name(Some(name));
+        crate::icons::set(&self.icon, name);
     }
 
     pub fn set_visible_row(&self, visible: bool) {
@@ -192,7 +197,7 @@ impl PageHeader {
         root.add_css_class("ra-page-header");
 
         let back = button(&["ra-page-back"]);
-        back.set_icon_name("go-previous-symbolic");
+        crate::icons::set_on_button(&back, "go-previous-symbolic", 16);
         back.add_css_class("flat");
         root.append(&back);
 

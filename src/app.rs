@@ -27,8 +27,16 @@ use crate::{info, layer, module, panel, popup, theme, warn};
 
 const APP_ID: &str = "dev.c4us4l1ty.ra";
 
+/// What to do once the panel exists.
+pub enum Mode {
+    /// Hand over to the main loop.
+    Run { watch: bool },
+    /// Render every window to PNG and exit.
+    Screenshot { dir: PathBuf },
+}
+
 /// Set up and run. Returns the process exit code.
-pub fn run(explicit_config: Option<PathBuf>, watch: bool) -> i32 {
+pub fn run(explicit_config: Option<PathBuf>, mode: Mode) -> i32 {
     let config_path = config::watch::resolve_path(explicit_config);
 
     let config = match Config::load(&config_path) {
@@ -52,6 +60,7 @@ pub fn run(explicit_config: Option<PathBuf>, watch: bool) -> i32 {
         crate::error!("GTK failed to initialise: {e}");
         return 1;
     }
+    let watch = matches!(mode, Mode::Run { watch: true });
 
     theme::install(&config.style);
 
@@ -110,6 +119,13 @@ pub fn run(explicit_config: Option<PathBuf>, watch: bool) -> i32 {
 
     // Global key handling for the popup.
     install_shortcuts(&app);
+
+    // Capture before the main loop starts: the windows need one real frame so
+    // they are measured, and `pump` gives them that without ever blocking on a
+    // compositor that may not support layer-shell at all.
+    if let Mode::Screenshot { dir } = &mode {
+        return capture_all(dir, &windows, &qs);
+    }
 
     // Reload: rebuild every window from scratch. Services keep running, so this
     // costs a few milliseconds and no bus traffic.
@@ -264,6 +280,62 @@ fn claim_bus(app: &gtk4::Application) -> Claim {
     Claim::Primary
 }
 
+/// Render every panel, then the quick settings, as PNGs in `dir`.
+///
+/// The popup is opened and paged through so that what gets captured is the
+/// real, populated surface: services have answered, tiles carry real labels,
+/// and the sliders sit at real values. Capturing an empty shell would prove
+/// nothing about whether the panel looks right.
+fn capture_all(
+    dir: &Path,
+    windows: &Rc<RefCell<Vec<(String, Rc<panel::PanelWindow>)>>>,
+    qs: &Rc<popup::QuickSettings>,
+) -> i32 {
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        crate::error!("cannot create {}: {e}", dir.display());
+        return 1;
+    }
+    crate::screenshot::settle();
+
+    let mut failures = 0;
+    for (name, panel) in windows.borrow().iter() {
+        let path = dir.join(format!("panel-{name}.png"));
+        report(&panel.window, &path, &mut failures);
+    }
+
+    // The popup window is built lazily on first open, so it has to be opened
+    // before it can be looked for - asking for the window first finds nothing
+    // and looks like a failure to build the popup at all.
+    qs.open();
+    crate::screenshot::settle();
+    match qs.window() {
+        Some(window) => report(&window, &dir.join("popup.png"), &mut failures),
+        None => {
+            crate::error!("the quick settings window was never created");
+            failures += 1;
+        }
+    }
+    qs.hide();
+
+    if failures == 0 {
+        println!("wrote {} panel(s) and the quick settings to {}", windows.borrow().len(), dir.display());
+        0
+    } else {
+        crate::error!("{failures} window(s) could not be rendered");
+        1
+    }
+}
+
+fn report(window: &gtk4::ApplicationWindow, path: &Path, failures: &mut i32) {
+    match crate::screenshot::capture(window.as_ref(), path) {
+        Ok((w, h)) => info!("rendered {} at {w}x{h}", path.display()),
+        Err(e) => {
+            *failures += 1;
+            crate::error!("{e}");
+        }
+    }
+}
+
 /// Print a report for `--diagnose`: what is running, and which services answered.
 pub fn diagnose(config_path: &Path) {
     println!("ra {}", env!("CARGO_PKG_VERSION"));
@@ -304,6 +376,14 @@ pub fn diagnose(config_path: &Path) {
     pump(&glib::MainContext::default(), std::time::Duration::from_millis(1500));
     for (name, status) in crate::service::availability() {
         println!("  {name:<18}{status}");
+    }
+
+    let unresolved = crate::icons::unresolved();
+    if !unresolved.is_empty() {
+        println!("\nicons: {} name(s) no installed theme provides", unresolved.len());
+        for name in &unresolved {
+            println!("  ! `{name}` has no fallback that exists either");
+        }
     }
 
     println!("\nmodules:");

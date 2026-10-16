@@ -9,11 +9,13 @@ mod app;
 mod config;
 mod dbus;
 mod future;
+mod icons;
 mod layer;
 mod logging;
 mod module;
 mod panel;
 mod popup;
+mod screenshot;
 mod service;
 mod state;
 mod theme;
@@ -38,6 +40,7 @@ OPTIONS
         --open           Open the quick settings of a running instance
         --close          Close the quick settings of a running instance
         --diagnose        Print what ra can see, then exit
+        --screenshot DIR  Render the panels and the popup to DIR as PNGs, then exit
     -v, --version         Print the version, then exit
     -h, --help            Print this help, then exit
 
@@ -53,6 +56,7 @@ fn main() -> ExitCode {
     let mut config_path: Option<PathBuf> = None;
     let mut watch = true;
     let mut diagnose = false;
+    let mut screenshot: Option<PathBuf> = None;
     // Which command to send to an already-running instance.
     let mut command: Option<&str> = None;
 
@@ -68,6 +72,14 @@ fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             "--diagnose" => diagnose = true,
+            "--screenshot" => {
+                let Some(value) = args.get(i + 1) else {
+                    eprintln!("--screenshot needs a directory to write to");
+                    return ExitCode::FAILURE;
+                };
+                screenshot = Some(PathBuf::from(value));
+                i += 1;
+            }
             "-t" | "--toggle" => command = Some("toggle"),
             "--open" => command = Some("open"),
             "--close" => command = Some("close"),
@@ -102,7 +114,11 @@ fn main() -> ExitCode {
         return send_command(command);
     }
 
-    let code = app::run(config_path, watch);
+    let mode = match screenshot {
+        Some(dir) => app::Mode::Screenshot { dir },
+        None => app::Mode::Run { watch },
+    };
+    let code = app::run(config_path, mode);
     ExitCode::from(u8::try_from(code).unwrap_or(1))
 }
 

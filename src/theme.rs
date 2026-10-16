@@ -75,11 +75,21 @@ fn rebuild(provider: &gtk4::CssProvider, style: &Style) {
 
     // Accent. `@define-color` is how a CSS variable is written in GTK; defining
     // `ra_accent` lets the rest of the sheet stay declarative.
+    //
+    // The default is `@theme_selected_bg_color`, not `@accent_bg_color`. GTK
+    // guarantees the `theme_*` names on every theme, because it uses them for
+    // its own widgets; `accent_bg_color` belongs to the libadwaita theme set and
+    // a stock Adwaita install does not define it at all. Referencing it meant
+    // every "active" highlight resolved to transparent, so a connected Wi-Fi
+    // tile looked identical to a disconnected one and a checked control looked
+    // unchecked. `@theme_selected_bg_color` is the colour the theme already
+    // uses to mean "this is selected", which is the meaning here too.
     if let Some(accent) = style.accent.as_deref().and_then(parse_hex) {
         css.push_str(&format!("@define-color ra_accent {accent};\n"));
     } else {
-        css.push_str("@define-color ra_accent @accent_bg_color;\n");
+        css.push_str("@define-color ra_accent @theme_selected_bg_color;\n");
     }
+    css.push_str("@define-color ra_accent_fg @theme_selected_fg_color;\n");
 
     // Background opacity. Folded into a named colour rather than an `alpha()`
     // call so that `alpha(@ra_panel_bg, x)` stays valid.
