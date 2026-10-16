@@ -54,10 +54,10 @@ impl AppLauncher {
 
         let status = gtk4::Label::new(None);
         status.add_css_class("ra-empty");
-
         root.append(&status);
-        root.append(&chooser);
 
+        // The chooser goes in the scroller only. A widget can have exactly one
+        // parent, and adding it to both is a hard GTK assertion failure.
         let scroller = gtk4::ScrolledWindow::new();
         scroller.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
         scroller.set_propagate_natural_height(true);

@@ -21,7 +21,6 @@ mod ui;
 
 use std::path::PathBuf;
 
-use gtk4::glib::prelude::ToVariant;
 use std::process::ExitCode;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -35,7 +34,9 @@ USAGE
 OPTIONS
     -c, --config <PATH>   Use this configuration file
     -w, --no-watch        Do not reload the config when it changes
-    -t, --toggle          Toggle the quick settings, then exit
+    -t, --toggle          Toggle the quick settings of a running instance
+        --open           Open the quick settings of a running instance
+        --close          Close the quick settings of a running instance
         --diagnose        Print what ra can see, then exit
     -v, --version         Print the version, then exit
     -h, --help            Print this help, then exit
@@ -52,7 +53,8 @@ fn main() -> ExitCode {
     let mut config_path: Option<PathBuf> = None;
     let mut watch = true;
     let mut diagnose = false;
-    let mut toggle = false;
+    // Which command to send to an already-running instance.
+    let mut command: Option<&str> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -66,7 +68,9 @@ fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             "--diagnose" => diagnose = true,
-            "-t" | "--toggle" => toggle = true,
+            "-t" | "--toggle" => command = Some("toggle"),
+            "--open" => command = Some("open"),
+            "--close" => command = Some("close"),
             "-w" | "--no-watch" => watch = false,
             "-c" | "--config" => {
                 i += 1;
@@ -94,8 +98,8 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    if toggle {
-        return toggle_quick_settings();
+    if let Some(command) = command {
+        return send_command(command);
     }
 
     let code = app::run(config_path, watch);
@@ -110,7 +114,7 @@ fn main() -> ExitCode {
 /// activates the `toggle` action the running panel exports through GTK's
 /// standard `org.gtk.Actions` interface, which works no matter which panel is
 /// on screen.
-fn toggle_quick_settings() -> ExitCode {
+fn send_command(command: &str) -> ExitCode {
     let Ok(bus) = dbus::Bus::session() else {
         eprintln!("cannot reach the session bus");
         return ExitCode::FAILURE;
@@ -121,11 +125,28 @@ fn toggle_quick_settings() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let body = gtk4::glib::Variant::tuple_from_iter([
-        &"toggle".to_variant(),
-        &gtk4::glib::Variant::array_from_iter::<gtk4::glib::Variant>([]),
-        &gtk4::glib::Variant::array_from_iter::<gtk4::glib::Variant>([]),
-    ]);
+    // `org.gtk.Actions.Activate(s, av, a{sv})`.
+    //
+    // The parameter is `av`, not `v`: glib marshals an action parameter as a
+    // one-element array of variants (and an absent one as an empty array),
+    // which is verified against the live interface rather than assumed.
+    //
+    // glib 0.22 exposes no constructor for a bare `v` - wrapping a value in a
+    // variant is `g_variant_new_variant`, which is not bound - so the message
+    // is built from GVariant text.
+    let command = match command {
+        "open" | "close" | "toggle" => command,
+        _ => "toggle",
+    };
+    let text = format!("('toggle', [<'{command}'>], @a{{sv}} {{}})");
+    let body = match gtk4::glib::Variant::parse(None, &text) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("internal error: cannot build the Activate message: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     match bus.call_blocking(APP_ID, "/dev/c4us4l1ty/ra", "org.gtk.Actions", "Activate", Some(&body)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

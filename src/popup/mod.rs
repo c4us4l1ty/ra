@@ -159,6 +159,8 @@ impl QuickSettings {
         let surface = ui::vbox(0);
         surface.add_css_class("ra-popup-surface");
 
+        // The scroller wraps the stack, so a page taller than the screen still
+        // scrolls. Only the stack goes in it - a widget can have one parent.
         let scroller = gtk4::ScrolledWindow::new();
         scroller.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
         scroller.set_propagate_natural_height(true);
@@ -435,6 +437,10 @@ impl QuickSettings {
         root.append(&self.grid);
 
         self.build_tiles();
+
+        // The root page goes in first so it is what `set_visible_child_name`
+        // finds on the very first frame.
+        self.stack.add_named(&self.root_page, Some("root"));
     }
 
     fn build_tiles(self: &Rc<Self>) {

@@ -57,9 +57,11 @@ pub fn run(explicit_config: Option<PathBuf>, watch: bool) -> i32 {
 
     let app = gtk4::Application::builder()
         .application_id(APP_ID)
-        // The panel owns its windows explicitly and must keep running with none
-        // of them mapped, so `run` is driven manually below.
-        .flags(gio::ApplicationFlags::NON_UNIQUE)
+        // Deliberately *not* NON_UNIQUE. That flag tells GApplication to skip
+        // the bus entirely, which would leave the panel unaddressable and make
+        // `ra --toggle` unable to find it. Claiming the name also means a
+        // second panel fails loudly at startup instead of fighting the first
+        // one for screen edges.
         .build();
 
     let windows: Rc<RefCell<Vec<(String, Rc<panel::PanelWindow>)>>> = Rc::new(RefCell::new(Vec::new()));
@@ -72,6 +74,18 @@ pub fn run(explicit_config: Option<PathBuf>, watch: bool) -> i32 {
     qs.apply_poll_interval(config.quick_settings.poll_interval_ms);
 
     panel::warm_services(&config);
+
+    // GTK requires `startup` before any window exists, and `register` is what
+    // emits it. Claiming the bus name here also means a second `ra` fails
+    // loudly instead of silently running two panels.
+    if !claim_bus(&app) {
+        return 1;
+    }
+
+    // The panels are never activated by the session manager, so there is
+    // nothing to do on activate; the handler exists only to silence GLib's
+    // "does not implement g_application_activate" warning.
+    app.connect_activate(|_| {});
 
     let monitors = current_monitors();
     *windows.borrow_mut() = panel::build_all(&app, &config, &monitors).borrow().clone();
@@ -157,9 +171,46 @@ fn current_monitors() -> Vec<gdk::Monitor> {
 /// delivered as a command instead, which is the same mechanism XFCE's own
 /// "Command Shortcut" uses.
 fn install_shortcuts(app: &gtk4::Application) {
-    let toggle = gtk4::gio::SimpleAction::new("toggle", None);
-    toggle.connect_activate(|_, _| popup::toggle());
+    // The action takes an explicit string parameter rather than being
+    // parameterless. That is deliberate: an empty D-Bus tuple is illegal, so a
+    // parameterless action has to be encoded as some arbitrary empty container,
+    // and the correct choice differs between GLib versions. A named parameter
+    // is unambiguous from both ends.
+    let Ok(ty) = glib::VariantTy::new("s") else { return };
+    let toggle = gio::SimpleAction::new("toggle", Some(ty));
+    toggle.connect_activate(|_, parameter| {
+        let command = parameter.and_then(|p| p.str()).unwrap_or("toggle").to_string();
+        match command.as_str() {
+            "open" => {
+                if let Some(q) = popup::handle() {
+                    q.open();
+                }
+            }
+            "close" => {
+                if let Some(q) = popup::handle() {
+                    q.hide();
+                }
+            }
+            _ => popup::toggle(),
+        }
+    });
     app.add_action(&toggle);
+}
+
+/// Claim the bus name and emit `startup` before any window exists.
+///
+/// GTK refuses to create a window until `GApplication::startup` has fired, and
+/// `startup` is emitted from `register`. Doing this explicitly - rather than
+/// letting `run` do it - is what lets the panels be built immediately, so they
+/// are on screen before the main loop starts rather than a frame later.
+fn claim_bus(app: &gtk4::Application) -> bool {
+    match app.register(None::<&gio::Cancellable>) {
+        Ok(()) => true,
+        Err(e) => {
+            warn!("cannot claim the session bus ({e}); is another ra already running?");
+            false
+        }
+    }
 }
 
 /// Print a report for `--diagnose`: what is running, and which services answered.

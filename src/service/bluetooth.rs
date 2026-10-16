@@ -13,7 +13,7 @@
 //! | " | `/org/bluez/hciN` | `org.bluez.Adapter1` |
 //! | " | `/org/bluez/hciN/dev_XX_...` | `org.bluez.Device1` |
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use gtk4::gio;
@@ -91,6 +91,9 @@ pub struct Bluetooth {
     emitter: Emitter<BluetoothState>,
     /// Object paths of every adapter.
     adapters: RefCell<Vec<String>>,
+    /// Whether *we* started a scan. BlueZ rejects `StopDiscovery` when none is
+    /// running, and logging that every time the popup closes would be noise.
+    scanning: Cell<bool>,
     bus: Option<Bus>,
     subs: RefCell<Vec<gio::SignalSubscription>>,
 }
@@ -101,6 +104,7 @@ impl Bluetooth {
             state: RefCell::new(BluetoothState::default()),
             emitter: Emitter::new(),
             adapters: RefCell::new(Vec::new()),
+            scanning: Cell::new(false),
             bus,
             subs: RefCell::new(Vec::new()),
         });
@@ -176,12 +180,20 @@ impl Bluetooth {
         }
     }
 
+    /// Start or stop a device scan.
+    ///
+    /// Idempotent in both directions: BlueZ errors when asked to stop a scan
+    /// that is not running, so only a scan this service started is stopped.
     pub fn set_discovering(&self, on: bool) {
+        if self.scanning.get() == on {
+            return;
+        }
         let Some(bus) = &self.bus else { return };
         for path in self.adapters.borrow().iter() {
             let method = if on { "StartDiscovery" } else { "StopDiscovery" };
             bus.call_no_reply(BUS, path, IFACE_ADAPTER, method, None);
         }
+        self.scanning.set(on);
     }
 
     pub fn connect_device(&self, path: &str) {
@@ -263,6 +275,11 @@ async fn reload(weak: Weak<Bluetooth>) {
             let adapter = dbus::variant_to_dict(adapter);
             powered |= adapter.get("Powered").and_then(dbus::as_bool).unwrap_or(false);
             discovering |= adapter.get("Discovering").and_then(dbus::as_bool).unwrap_or(false);
+            // The daemon can end a scan on its own (timeout, or another
+            // client stopping it); do not keep claiming we own it.
+            if !discovering {
+                me.scanning.set(false);
+            }
             continue;
         }
 
