@@ -453,13 +453,39 @@ impl QuickSettings {
                 continue;
             }
             let Some(tile) = self.make_tile(name) else {
-                warn!("unknown quick-settings tile `{name}`; skipping it");
+                warn!(
+                    "unknown quick-settings tile `{name}`; known tiles are {} - skipping it",
+                    QuickSettings::known_tiles().join(", ")
+                );
                 continue;
             };
             self.grid.attach(&tile.root, (index % 2) as i32, (index / 2) as i32, 1, 1);
             made.push((name.clone(), tile));
         }
         *self.tiles.borrow_mut() = made;
+    }
+
+    /// Every tile this build can draw.
+    ///
+    /// Kept alongside the `make_tile` match it describes. The two can drift,
+    /// which is why `make_tile` returns `None` for anything it does not
+    /// recognise rather than drawing an empty box - but this list is what the
+    /// configuration defaults are checked against, so a name added here without
+    /// a matching match arm is caught by
+    /// `config::tests::every_default_tile_is_implemented` failing in the
+    /// honest direction: the test asks the popup what it can draw.
+    pub fn known_tiles() -> &'static [&'static str] {
+        &[
+            "airplane",
+            "bluetooth",
+            "dark-style",
+            "do-not-disturb",
+            "microphone",
+            "network",
+            "night-light",
+            "power-profile",
+            "session",
+        ]
     }
 
     fn make_tile(self: &Rc<Self>, name: &str) -> Option<Tile> {
@@ -1464,6 +1490,13 @@ pub fn install(app: &gtk4::Application, cfg: &QsConfig, close_on_blur: bool) -> 
 }
 
 /// Toggle the popup. Called by every indicator module.
+/// Tiles the quick settings knows how to draw.
+///
+/// See [`QuickSettings::known_tiles`].
+pub fn known_tiles() -> &'static [&'static str] {
+    QuickSettings::known_tiles()
+}
+
 pub fn toggle() {
     let qs = SERVICE.with(|slot| slot.borrow().clone());
     if let Some(qs) = qs {

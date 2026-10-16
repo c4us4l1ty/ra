@@ -381,9 +381,22 @@ fn default_poll_ms() -> u32 {
     1000
 }
 
+/// Tiles used when a configuration sets `[quick_settings]` but no `tiles` key.
+///
+/// Must match the `tiles` list in the shipped `config/ra.toml`, and every name
+/// must be implemented: an unknown name is skipped with a warning, so a typo
+/// here would cost a tile silently. `every_default_tile_is_implemented` is the
+/// test that catches it.
 fn default_tiles() -> Vec<String> {
     [
-        "network", "bluetooth", "power-profile", "night-light", "dark-style", "do-not-disturb", "keyboard",
+        "network",
+        "bluetooth",
+        "power-profile",
+        "night-light",
+        "dark-style",
+        "do-not-disturb",
+        "airplane",
+        "microphone",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -732,6 +745,33 @@ mod tests {
             args: Some(toml::toml! { format = 42 }.into()),
         };
         assert_eq!(bad.args_as::<Shape>(), Shape::default(), "bad args fall back, they do not panic");
+    }
+
+    /// A tile name that no build implements is skipped with a warning, so a
+    /// typo in the shipped defaults would cost a tile *silently* - no error, no
+    /// crash, just one fewer square in the popup. This is the only place that
+    /// can catch it.
+    #[test]
+    fn every_default_tile_is_implemented() {
+        let known = crate::popup::known_tiles();
+        for tile in default_tiles() {
+            assert!(
+                known.contains(&tile.as_str()),
+                "the default tile `{tile}` is not implemented; known tiles are {known:?}"
+            );
+        }
+    }
+
+    /// The shipped config and the fallback defaults must offer the same tiles,
+    /// or `tiles = [...]` would visibly change the popup when it is omitted.
+    #[test]
+    fn the_shipped_config_matches_the_fallback_defaults() {
+        let shipped = Config::parse(DEFAULT_CONFIG).unwrap();
+        assert_eq!(
+            shipped.quick_settings.tiles,
+            default_tiles(),
+            "config/ra.toml lists different tiles than the built-in fallback"
+        );
     }
 
     #[derive(Debug, Default, PartialEq, Deserialize)]

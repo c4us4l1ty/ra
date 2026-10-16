@@ -174,6 +174,23 @@ poll_interval_ms = 1000
 Anything not listed is not built at all, so a panel that does not want
 brightness does not pay for it.
 
+The nine available tiles:
+
+| Tile | Does |
+|---|---|
+| `network` | Wi-Fi state; opens the network list |
+| `bluetooth` | Adapter power; opens the device list |
+| `power-profile` | Cycles power-saver / balanced / performance |
+| `night-light` | Night light, with a temperature slider |
+| `dark-style` | Follows the GTK theme when on, forces dark when off |
+| `do-not-disturb` | Silences notifications ra itself raises |
+| `airplane` | Turns off Wi-Fi and Bluetooth together |
+| `microphone` | Input mute; also switches the input device |
+| `session` | Lock, suspend, restart, shut down, log out |
+
+A name that no build implements is skipped with a warning in the log rather
+than drawing an empty square, so a typo costs one tile and says so.
+
 ### Theming
 
 Every colour in the built-in stylesheet is a **GTK named colour**
@@ -235,6 +252,59 @@ ra -w, --no-watch      do not reload on config change
 ```
 
 The XFCE panels are never touched.
+
+---
+
+## Troubleshooting
+
+**Text fields ignore the keyboard** (the Wi-Fi passphrase, the launcher
+search). GTK4 talks to the compositor's text-input protocol directly, so this
+normally just works. If your compositor does not negotiate that protocol, GTK
+falls back to the old XIM path and can end up with no input method at all:
+
+```sh
+GTK_IM_MODULE=simple ra
+```
+
+If that fixes it, add `env GTK_IM_MODULE=simple` to the `Exec=` line in
+`~/.config/autostart/ra.desktop`.
+
+**The brightness slider moves and snaps back.** You are not in the group that
+owns the backlight sysfs node — see
+[Brightness needs a group membership](#brightness-needs-a-group-membership)
+above.
+
+**Nothing is on screen.** `ra --diagnose` reports whether `wlr-layer-shell`
+is available. On XFCE/Wayland it always is; if it is not, the session is not
+running labwc.
+
+**A config change did nothing.** Set `RA_LOG=info`. A syntax error is reported
+with a line number, and the previous configuration stays in place.
+
+---
+
+## Known limitations
+
+Stated plainly, because a panel that hides its edges is worse than one that
+names them.
+
+- **Do Not Disturb is currently inert.** The toggle is real and it persists,
+  but ra does not own a notification daemon, so there are no notifications for
+  it to silence. Suppressing *other* applications' pop-ups would mean taking
+  over the notification daemon, which is not something a panel should do behind
+  your back. The daemon is on the roadmap and the toggle is already wired to it.
+- **Audio has only been exercised by unit tests.** Volume and device switching
+  go through `wpctl`, the official WirePlumber CLI, specifically so they behave
+  the same across PipeWire versions. The parser is tested against captured
+  output, but it has not been run against live hardware by the author.
+- **A WPA network with no saved profile gets an inline passphrase prompt**
+  rather than opening NetworkManager's dialog, because a second toplevel cannot
+  take keyboard focus while the popup holds the grab. Enterprise (802.1x)
+  networks are not supported.
+- **`custom` modules run a command on a timer.** That is what they are for, but
+  a slow command costs you CPU at whatever interval you chose.
+- **One instance only.** A second `ra` refuses to start rather than fighting
+  the first one for screen edges.
 
 ---
 

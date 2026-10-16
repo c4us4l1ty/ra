@@ -67,6 +67,32 @@ pub fn run(explicit_config: Option<PathBuf>, watch: bool) -> i32 {
     let windows: Rc<RefCell<Vec<(String, Rc<panel::PanelWindow>)>>> = Rc::new(RefCell::new(Vec::new()));
     let current = Rc::new(RefCell::new(config.clone()));
 
+    // Claim the bus name before any widget exists. GTK requires `startup` -
+    // emitted by `register` - before a window may be constructed, and a second
+    // instance has to bail out before it builds one.
+    match claim_bus(&app) {
+        Claim::Primary => {}
+        Claim::Remote => {
+            crate::error!("another ra already owns {APP_ID}; not starting a second panel");
+            // Enter the loop anyway. For a remote application this hands our
+            // start-up command to the instance that is already running and then
+            // unwinds cleanly, unregistering on the way out. Dropping a
+            // registered GApplication without running it leaves GLib warning
+            // that it did not unregister.
+            app.run_with_args::<&str>(&[]);
+            return 1;
+        }
+        Claim::Failed(e) => {
+            crate::error!("cannot reach the session bus ({e})");
+            return 1;
+        }
+    }
+
+    // The panels are never activated by the session manager, so there is
+    // nothing to do on activate; the handler exists only to silence GLib's
+    // "does not implement g_application_activate" warning.
+    app.connect_activate(|_| {});
+
     // The popup needs a handle on the application and the resolved geometry of
     // the panel it hangs off.
     let qs = popup::install(&app, &config.quick_settings, config.general.close_popup_on_blur);
@@ -74,18 +100,6 @@ pub fn run(explicit_config: Option<PathBuf>, watch: bool) -> i32 {
     qs.apply_poll_interval(config.quick_settings.poll_interval_ms);
 
     panel::warm_services(&config);
-
-    // GTK requires `startup` before any window exists, and `register` is what
-    // emits it. Claiming the bus name here also means a second `ra` fails
-    // loudly instead of silently running two panels.
-    if !claim_bus(&app) {
-        return 1;
-    }
-
-    // The panels are never activated by the session manager, so there is
-    // nothing to do on activate; the handler exists only to silence GLib's
-    // "does not implement g_application_activate" warning.
-    app.connect_activate(|_| {});
 
     let monitors = current_monitors();
     *windows.borrow_mut() = panel::build_all(&app, &config, &monitors).borrow().clone();
@@ -216,20 +230,38 @@ fn install_shortcuts(app: &gtk4::Application) {
     app.add_action(&toggle);
 }
 
+/// What happened when the application tried to claim the session bus name.
+enum Claim {
+    /// We own the name and may build windows.
+    Primary,
+    /// Another instance owns it; our start-up command was forwarded to it.
+    Remote,
+    /// There is no usable session bus at all.
+    Failed(glib::Error),
+}
+
 /// Claim the bus name and emit `startup` before any window exists.
 ///
 /// GTK refuses to create a window until `GApplication::startup` has fired, and
 /// `startup` is emitted from `register`. Doing this explicitly - rather than
 /// letting `run` do it - is what lets the panels be built immediately, so they
 /// are on screen before the main loop starts rather than a frame later.
-fn claim_bus(app: &gtk4::Application) -> bool {
-    match app.register(None::<&gio::Cancellable>) {
-        Ok(()) => true,
-        Err(e) => {
-            warn!("cannot claim the session bus ({e}); is another ra already running?");
-            false
-        }
+///
+/// `register` reporting success is *not* enough to check. When the name is
+/// already taken, GApplication forwards the start-up command to the running
+/// instance and marks itself remote - while still returning success. A remote
+/// application has no local window list, so the first `GtkWindow` constructed
+/// afterwards dereferences null inside `gtk_application_window_added` and takes
+/// the process down with a bare SIGSEGV, with no message. `is_remote` is the
+/// only reliable signal, and it must be checked before a widget is built.
+fn claim_bus(app: &gtk4::Application) -> Claim {
+    if let Err(e) = app.register(None::<&gio::Cancellable>) {
+        return Claim::Failed(e);
     }
+    if app.is_remote() {
+        return Claim::Remote;
+    }
+    Claim::Primary
 }
 
 /// Print a report for `--diagnose`: what is running, and which services answered.
@@ -283,6 +315,15 @@ pub fn diagnose(config_path: &Path) {
         println!("\nconfigured modules: {}", cfg.module_names().join(", "));
         for problem in module::validate(&cfg.module_names(), false) {
             println!("  ! {problem}");
+        }
+
+        println!("configured tiles:  {}", cfg.quick_settings.tiles.join(", "));
+        // A tile this build cannot draw is dropped with a warning at runtime,
+        // so name it here rather than letting it look like it is working.
+        for tile in &cfg.quick_settings.tiles {
+            if !popup::known_tiles().contains(&tile.as_str()) {
+                println!("  ! no tile named `{tile}` in this build");
+            }
         }
     }
 
