@@ -807,7 +807,7 @@ impl QuickSettings {
             let app_icon = crate::icons::resolve(&notification.app_icon);
             let icon = crate::icons::image(&app_icon, 22);
             icon.add_css_class("ra-notification-icon");
-            layout.append(&icon);
+            if icon.parent().is_none() { layout.append(&icon); }
 
             let text = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
             text.set_hexpand(true);
@@ -842,10 +842,10 @@ impl QuickSettings {
                     daemon.close(close_id);
                 }
             });
-            layout.append(&close);
+            if close.parent().is_none() { layout.append(&close); }
 
-            row.set_child(Some(&layout));
-            self.notifications_rows.append(&row);
+            if layout.parent().is_none() { row.set_child(Some(&layout)); }
+            if row.parent().is_none() { self.notifications_rows.append(&row); }
         }
 
         // Deferred counter shown in the subtitle row of the DND tile only,
@@ -885,13 +885,15 @@ impl QuickSettings {
         subs.push(service::brightness::get().on_change(repaint(&weak)));
         subs.push(service::nightlight::get(None, None).on_change(repaint(&weak)));
 
-        // Notifications: rebuild only when a message arrives or DND changes,
-        // not on every service refresh, so the list stays readable.
+        // Notifications: rebuild whenever the daemon changes state or a new
+        // message arrives, not only when the Notifications page is shown, so
+        // the root-page list stays up-to-date without a manual refresh.
+        let weak = Rc::downgrade(self);
         subs.push(crate::service::notification::get().on_change({
-            let weak = Rc::downgrade(self);
+            let weak = weak.clone();
             move |_| {
                 if let Some(me) = weak.upgrade() {
-                    if me.visible.get() && me.page.get() == Page::Notifications {
+                    if me.visible.get() {
                         me.refresh_notifications();
                     }
                 }
