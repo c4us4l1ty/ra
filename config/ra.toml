@@ -53,6 +53,13 @@ tiles = [
 volume = true
 brightness = true
 microphone = true
+# Notification daemon: claim `org.freedesktop.Notifications` (opt-in).
+# Off by default because it replaces the desktop's notifier (xfce4-notifyd).
+# Turning this on routes every notification through ra; if ra exits, notifications
+# go nowhere until it returns. The Do-Not-Disturb tile suppresses what ra shows.
+notification_daemon = false
+# Show the notification list at the bottom of the quick settings (needs daemon).
+notifications = true
 # Fallback interval for values the kernel offers no change signal for
 # (brightness). 0 disables it; the slider still works.
 poll_interval_ms = 1000
@@ -119,3 +126,5 @@ center = [
 # Reusable sections. Reference one from a panel with "@name".
 # [include]
 # indicators = ["network", "volume", "battery"]
+
+# Reusable sections. Reference one from a panel with "@name".
