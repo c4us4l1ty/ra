@@ -384,6 +384,17 @@ pub fn as_bytes_str(v: &glib::Variant) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
+/// Build an `a{sv}` from string keys and already-built variants.
+///
+/// glib 0.22 dropped the `Variant::from_a{sv}` convenience constructors, so
+/// `a{sv}` has to be assembled from `{sv}` dict entries.
+pub fn vardict(entries: Vec<(String, glib::Variant)>) -> glib::Variant {
+    use glib::variant::DictEntry;
+    glib::Variant::array_from_iter::<DictEntry<String, glib::Variant>>(
+        entries.into_iter().map(|(k, v)| glib::Variant::from_dict_entry(&k.to_variant(), &v)),
+    )
+}
+
 /// Spawn a future on the GLib main context without pulling in an executor.
 pub fn spawn<F>(future: F)
 where
