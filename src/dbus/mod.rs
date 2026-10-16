@@ -458,6 +458,9 @@ pub fn as_bytes_str(v: &glib::Variant) -> Option<String> {
 /// The round trip costs a few microseconds and happens once per network join,
 /// never on a hot path.
 pub fn vardict(entries: Vec<(String, glib::Variant)>) -> glib::Variant {
+    if entries.is_empty() {
+        return empty_dict();
+    }
     let body = entries
         .iter()
         .map(|(key, value)| {
@@ -678,5 +681,21 @@ mod tests {
         assert_eq!(as_bytes_str(&good).as_deref(), Some("hi"));
         let bad = glib::Variant::from(vec![0xff_u8, 0xfe]);
         assert_eq!(as_bytes_str(&bad), None);
+    }
+
+    /// Brute-force edge cases for vardict.
+    #[test]
+    fn vardict_survives_every_edge() {
+        let empty = vardict(vec![]);
+        assert!(variant_to_dict(empty).is_empty());
+        let tricky = vardict(vec![("key'x".to_string(), 42_u32.to_variant())]);
+        assert_eq!(variant_to_dict(tricky).len(), 1);
+    }
+
+    /// reply_value never panics.
+    #[test]
+    fn reply_value_never_panics() {
+        let bare = "bare".to_variant();
+        assert_eq!(reply_value(bare.clone()), bare);
     }
 }

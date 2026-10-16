@@ -18,14 +18,14 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use gtk4::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub mod watch;
 
 pub const DEFAULT_CONFIG: &str = include_str!("../config/ra.toml");
 
 /// Screen edge a panel is anchored to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Edge {
     #[default]
@@ -36,7 +36,7 @@ pub enum Edge {
 }
 
 /// `wlr-layer-shell` layer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Layer {
     Bottom,
@@ -94,7 +94,7 @@ pub fn monitor_name(m: &gtk4::gdk::Monitor) -> String {
 // ---------------------------------------------------------------------------
 
 /// A reference to a module, either as a bare name or with options.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum ModuleRef {
     /// `"clock"`
@@ -113,7 +113,7 @@ impl ModuleRef {
 }
 
 /// A single module placed in a panel section.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModuleSpec {
     /// Registered module name. `"custom:foo"` looks up a user module.
@@ -141,7 +141,7 @@ impl ModuleSpec {
 }
 
 /// Several modules sharing one container, addressable in CSS by `#name`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Group {
     /// Becomes the container's CSS id.
@@ -154,7 +154,7 @@ pub struct Group {
 }
 
 /// What a slot renders.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum Slot {
     /// A plain or configured module.
@@ -168,7 +168,7 @@ pub enum Slot {
 // ---------------------------------------------------------------------------
 
 /// Per-panel edge insets, in pixels. Each edge is optional; unset means 0.
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Margin {
     #[serde(default)]
@@ -182,7 +182,7 @@ pub struct Margin {
 }
 
 /// One panel: one window (or one window per monitor) on one edge.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Panel {
     /// Identifier, used in logs and as the default CSS class (`panel-<name>`).
@@ -292,6 +292,20 @@ pub enum MonitorSpec {
     Named(String),
 }
 
+impl Serialize for MonitorSpec {
+    /// Written back as the same spelling the user is shown in the settings
+    /// window, not as a struct: the deserializer accepts both `"all"` and
+    /// `{ monitor = "all" }`, and a round-trip that rewrites one into the other
+    /// would produce a diff on every save.
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::First => s.serialize_str("first"),
+            Self::All => s.serialize_str("all"),
+            Self::Named(name) => s.serialize_str(name),
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for MonitorSpec {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
@@ -323,7 +337,7 @@ impl<'de> Deserialize<'de> for MonitorSpec {
 // ---------------------------------------------------------------------------
 
 /// Where the quick-settings window is placed relative to its anchor panel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PopupAnchor {
     TopRight,
@@ -336,7 +350,7 @@ pub enum PopupAnchor {
 
 /// Order and visibility of the quick-settings tiles. Anything omitted is not
 /// built at all, so a panel that does not want brightness does not pay for it.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuickSettings {
     #[serde(default = "default_true")]
@@ -439,7 +453,7 @@ impl Default for QuickSettings {
 // Root
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Style {
     /// Extra CSS appended after the built-in stylesheet. Missing file is a
@@ -464,7 +478,7 @@ impl Default for Style {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct General {
     /// Reload the config when the file changes.
@@ -491,7 +505,7 @@ impl Default for General {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
@@ -546,6 +560,42 @@ impl Config {
             }
             Err(e) => Err(format!("cannot read {}: {e}", path.display())),
         }
+    }
+
+    /// Render back to TOML.
+    ///
+    /// The settings window is a two-way editor: it has to be able to write what
+    /// it read. That is the whole reason every schema struct derives
+    /// `Serialize`, and the reason `deny_unknown_fields` is a *deserialize*
+    /// attribute only - a round trip through this method must not lose a key.
+    ///
+    /// Round-tripping is lossy in one deliberate way: comments and key order
+    /// come from the struct, not from whatever the user typed. A settings
+    /// window that rewrote the file on every keystroke would be worse than one
+    /// that saves on demand, so the file is only rewritten when the user asks.
+    pub fn to_toml(&self) -> Result<String, String> {
+        toml::to_string_pretty(self).map_err(|e| e.to_string())
+    }
+
+    /// Write the config to `path`, creating the directory if needed.
+    ///
+    /// The write goes to a temporary file in the same directory and is then
+    /// renamed over the target. A plain `write` truncates first, so a crash
+    /// halfway through leaves a half-written config and the panel comes back
+    /// with nothing; a rename is atomic on every filesystem that matters and
+    /// the watcher sees either the old file or the new one.
+    pub fn save(&self, path: &Path) -> Result<(), String> {
+        let text = self.to_toml()?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+        }
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, &text)
+            .map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, path)
+            .map_err(|e| format!("cannot replace {}: {e}", path.display()))?;
+        Ok(())
     }
 
     /// Expand `"@name"` references in a panel section against `include`.

@@ -151,7 +151,6 @@ fn build_one(
     // panel is invisible while every log line says it was created. The
     // screenshot path masked this because it presents each window itself.
     window.present();
-
     Rc::new(PanelWindow { window, subs })
 }
 

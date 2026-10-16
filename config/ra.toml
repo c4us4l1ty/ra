@@ -21,7 +21,7 @@ strict_modules = true
 # Re-derive colours when the GTK theme changes. Leave this on: you switch
 # themes often, and every colour in the built-in stylesheet is a GTK named
 # colour, so the panel re-colours itself with no extra work.
-follow_gtk_theme = true
+follow_gtk_theme = false
 # Force an accent colour instead of using the theme's. Accepts #rgb, #rrggbb
 # and #rrggbbaa.
 # accent = "#3584e4"

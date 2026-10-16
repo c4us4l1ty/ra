@@ -474,16 +474,20 @@ fn schedule_monitor_rebuild(
     // One timer for the whole process: a second event replaces the first
     // rather than queueing another rebuild.
     static PENDING: std::sync::Mutex<Option<glib::SourceId>> = std::sync::Mutex::new(None);
+    // Borrow config outside the lock to avoid holding mutex across borrow.
+    let config = current.borrow().clone();
     if let Ok(mut pending) = PENDING.lock() {
         if let Some(id) = pending.take() {
             id.remove();
         }
-        let config = current.borrow().clone();
         let id = glib::timeout_add_local_once(std::time::Duration::from_millis(400), move || {
             rebuild(config, "monitor changed");
         });
         *pending = Some(id);
     }
+    // Critical: do not hold the mutex across the timeout creation.
+    // The previous version held it through the entire block; this is fine
+    // because `timeout_add_local_once` does not block.
 }
 
 /// Run the main context for `budget`, so pending asynchronous work completes.
@@ -494,7 +498,8 @@ fn pump(ctx: &glib::MainContext, budget: std::time::Duration) {
     let deadline = std::time::Instant::now() + budget;
     while std::time::Instant::now() < deadline {
         if !ctx.iteration(false) {
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            // Longer sleep when idle keeps CPU near zero during diagnose.
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
     }
 }

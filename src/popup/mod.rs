@@ -155,6 +155,7 @@ impl QuickSettings {
             .resizable(false)
             .decorated(false)
             .build();
+        window.set_hide_on_close(true);
         window.add_css_class("ra-popup");
         window.set_default_size(self.cfg.width as i32, -1);
 

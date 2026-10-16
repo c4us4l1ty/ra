@@ -41,6 +41,7 @@ OPTIONS
         --close          Close the quick settings of a running instance
         --diagnose        Print what ra can see, then exit
         --screenshot DIR  Render the panels and the popup to DIR as PNGs, then exit
+    --settings         Open the settings editor (TOML round-trip)
     -v, --version         Print the version, then exit
     -h, --help            Print this help, then exit
 
@@ -93,6 +94,10 @@ fn main() -> ExitCode {
                         return ExitCode::FAILURE;
                     }
                 }
+            }
+            "--settings" => {
+                crate::settings::install();
+                return ExitCode::SUCCESS;
             }
             other => {
                 eprintln!("unknown option `{other}`\n\n{HELP}");
@@ -154,7 +159,11 @@ fn send_command(command: &str) -> ExitCode {
         "open" | "close" | "toggle" => command,
         _ => "toggle",
     };
-    let text = format!("('toggle', [<'{command}'>], @a{{sv}} {{}})");
+    // Build `('toggle', [<'command'>], @a{sv} {})` with quoted parameter.
+    // The parameter value is embedded as a quoted GVariant string; command
+    // is validated above so injection through this path is impossible.
+    let param_quoted = format!("'{}'", command.replace("'", "\\'"));
+    let text = format!("('toggle', [<{param_quoted}>], @a{{sv}} {{}})");
     let body = match gtk4::glib::Variant::parse(None, &text) {
         Ok(v) => v,
         Err(e) => {
@@ -173,3 +182,5 @@ fn send_command(command: &str) -> ExitCode {
 }
 
 const APP_ID: &str = "dev.c4us4l1ty.ra";
+
+mod settings;

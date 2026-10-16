@@ -158,6 +158,11 @@ impl Audio {
         } else {
             info!("PipeWire D-Bus unavailable; polling audio every {ms} ms");
         }
+        // Fallback: start the poll timer immediately if configured.
+        let ms = self.idle_interval_ms.get();
+        if ms > 0 {
+            self.rearm(ms);
+        }
         self.subs.borrow_mut().push(bus.subscribe(
             Some("org.wireplumber"),
             None,

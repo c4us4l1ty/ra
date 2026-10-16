@@ -23,29 +23,29 @@
 
 window.ra-panel {
   background-color: transparent;
-  color: @window_fg_color;
+  color: #ffffff;
 }
 
 /* The visible bar surface. `.ra-solid` is used where the compositor does not
  * give us the option of letting the desktop show through. */
 .ra-panel-surface {
-  background-color: alpha(@window_bg_color, 0.92);
-  border-bottom: 1px solid alpha(@borders, 0.75);
+  background-color: alpha(#181818, 0.92);
+  border-bottom: 1px solid alpha(#333333, 0.75);
 }
 
 .ra-panel-edge-bottom .ra-panel-surface {
   border-bottom: none;
-  border-top: 1px solid alpha(@borders, 0.75);
+  border-top: 1px solid alpha(#333333, 0.75);
 }
 
 .ra-panel-edge-left .ra-panel-surface {
   border-bottom: none;
-  border-right: 1px solid alpha(@borders, 0.75);
+  border-right: 1px solid alpha(#333333, 0.75);
 }
 
 .ra-panel-edge-right .ra-panel-surface {
   border-bottom: none;
-  border-left: 1px solid alpha(@borders, 0.75);
+  border-left: 1px solid alpha(#333333, 0.75);
 }
 
 .ra-panel .ra-section {
@@ -59,7 +59,7 @@ window.ra-panel {
 }
 
 .ra-section {
-  color: @window_fg_color;
+  color: #ffffff;
 }
 
 /* ----------------------------------------------------------- bar modules -- */
@@ -69,7 +69,7 @@ window.ra-panel {
   min-width: 0;
   min-height: 0;
   border-radius: 8px;
-  color: @window_fg_color;
+  color: #ffffff;
   transition: background-color 120ms ease-out;
 }
 
@@ -92,19 +92,19 @@ window.ra-panel {
 .ra-separator {
   min-width: 1px;
   margin: 6px 4px;
-  background-color: alpha(@borders, 0.9);
+  background-color: alpha(#333333, 0.9);
 }
 
 /* --------------------------------------------------------------- popover -- */
 
 window.ra-popup {
   background-color: transparent;
-  color: @window_fg_color;
+  color: #ffffff;
 }
 
 .ra-popup-surface {
-  background-color: alpha(@window_bg_color, 0.96);
-  border: 1px solid alpha(@borders, 0.8);
+  background-color: alpha(#181818, 0.96);
+  border: 1px solid alpha(#333333, 0.8);
   border-radius: 16px;
   padding: 14px;
   box-shadow: 0 8px 28px alpha(black, 0.28), 0 2px 6px alpha(black, 0.16);
@@ -117,7 +117,7 @@ window.ra-popup {
 .ra-user-pill {
   padding: 6px 12px;
   border-radius: 14px;
-  background-color: alpha(@window_fg_color, 0.08);
+  background-color: alpha(#ffffff, 0.08);
 }
 
 .ra-round-button {
@@ -125,13 +125,13 @@ window.ra-popup {
   min-height: 30px;
   padding: 0;
   border-radius: 15px;
-  background-color: alpha(@window_fg_color, 0.08);
-  color: @window_fg_color;
+  background-color: alpha(#ffffff, 0.08);
+  color: #ffffff;
   transition: background-color 120ms ease-out;
 }
 
 .ra-round-button:hover {
-  background-color: alpha(@window_fg_color, 0.16);
+  background-color: alpha(#ffffff, 0.16);
 }
 
 .ra-round-button:checked {
@@ -143,8 +143,8 @@ window.ra-popup {
 
 .ra-tile {
   border-radius: 14px;
-  background-color: alpha(@window_fg_color, 0.07);
-  color: @window_fg_color;
+  background-color: alpha(#ffffff, 0.07);
+  color: #ffffff;
   padding: 0;
   min-height: 52px;
   border: 1px solid transparent;
@@ -152,7 +152,7 @@ window.ra-popup {
 }
 
 .ra-tile:hover {
-  background-color: alpha(@window_fg_color, 0.13);
+  background-color: alpha(#ffffff, 0.13);
 }
 
 .ra-tile:checked,
@@ -191,7 +191,7 @@ window.ra-popup {
 .ra-slider trough {
   min-height: 5px;
   border-radius: 3px;
-  background-color: alpha(@window_fg_color, 0.18);
+  background-color: alpha(#ffffff, 0.18);
 }
 
 .ra-slider trough highlight {
@@ -203,7 +203,7 @@ window.ra-popup {
   min-width: 16px;
   min-height: 16px;
   border-radius: 50%;
-  background-color: @window_fg_color;
+  background-color: #ffffff;
   border: none;
   margin: -6px 0;
   transition: transform 100ms ease-out;
@@ -230,7 +230,7 @@ window.ra-popup {
 
 .ra-page-back,
 .ra-page-action {
-  color: @window_fg_color;
+  color: #ffffff;
 }
 
 .ra-list {
@@ -243,7 +243,7 @@ window.ra-popup {
 }
 
 .ra-list row:hover {
-  background-color: alpha(@window_fg_color, 0.08);
+  background-color: alpha(#ffffff, 0.08);
 }
 
 .ra-list row:selected {
@@ -271,7 +271,7 @@ window.ra-popup {
 }
 
 .ra-app:hover {
-  background-color: alpha(@window_fg_color, 0.1);
+  background-color: alpha(#ffffff, 0.1);
 }
 
 .ra-app-name {
@@ -283,8 +283,8 @@ window.ra-popup {
 .ra-entry {
   padding: 7px 10px;
   border-radius: 9px;
-  background-color: alpha(@window_fg_color, 0.1);
-  border: 1px solid alpha(@borders, 0.9);
+  background-color: alpha(#ffffff, 0.1);
+  border: 1px solid alpha(#333333, 0.9);
 }
 
 .ra-entry:focus {
@@ -307,10 +307,10 @@ window.ra-popup {
   min-height: 24px;
   margin: 0;
   border-radius: 3px;
-  background-color: alpha(@window_fg_color, 0.25);
+  background-color: alpha(#ffffff, 0.25);
   border: none;
 }
 
 .ra-scroller scrollbar slider:hover {
-  background-color: alpha(@window_fg_color, 0.4);
+  background-color: alpha(#ffffff, 0.4);
 }
