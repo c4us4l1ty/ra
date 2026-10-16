@@ -43,6 +43,7 @@ enum Page {
     Apps,
     Session,
     About,
+    Notifications,
 }
 
 impl Page {
@@ -54,6 +55,7 @@ impl Page {
             Self::Apps => "apps",
             Self::Session => "session",
             Self::About => "about",
+            Self::Notifications => "notifications",
         }
     }
 }
@@ -92,6 +94,9 @@ pub struct QuickSettings {
     launcher: apps::AppLauncher,
     session: Rc<SessionPage>,
     about: gtk4::Box,
+    notifications_root: gtk4::Box,
+    notifications_rows: gtk4::ListBox,
+    notifications_scroll: gtk4::ScrolledWindow,
     _subs: RefCell<Vec<Subscription>>,
 }
 
@@ -122,6 +127,9 @@ impl QuickSettings {
             launcher: apps::AppLauncher::new(),
             session: Rc::new(SessionPage::new()),
             about: about_page(),
+            notifications_root: ui::vbox(0),
+            notifications_rows: gtk4::ListBox::new(),
+            notifications_scroll: gtk4::ScrolledWindow::new(),
             _subs: RefCell::new(Vec::new()),
         });
 
@@ -322,6 +330,9 @@ impl QuickSettings {
                 service::bluetooth::get().set_discovering(true);
             }
             Page::Apps => self.launcher.focus_search(),
+            Page::Notifications => {
+                self.refresh_notifications();
+            }
             _ => service::bluetooth::get().set_discovering(false),
         }
     }
@@ -507,6 +518,21 @@ impl QuickSettings {
             header.append(&b);
         }
         root.append(&header);
+
+        // The notifications row lives below the tiles. It is visible whenever
+        // the popup is open and the daemon is either off (nothing to show) or
+        // running (deferred messages are shown once DND turns off). It is never
+        // rebuilt per change: the list rows update in place, which is what
+        // keeps this fast on a slow compositor.
+        self.notifications_rows.add_css_class("ra-notifications-list");
+        self.notifications_rows.set_selection_mode(gtk4::SelectionMode::None);
+        self.notifications_scroll.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
+        self.notifications_scroll.set_propagate_natural_height(true);
+        self.notifications_scroll.set_max_content_height(180);
+        self.notifications_scroll.set_child(Some(&self.notifications_rows));
+        self.notifications_root.append(&self.notifications_scroll);
+        self.notifications_root.set_size_request(-1, 150);
+        root.append(&self.notifications_root);
 
         root.append(&self.volume_row.root);
         root.append(&self.brightness_row.root);
@@ -731,12 +757,13 @@ impl QuickSettings {
         // and for the logind permission stream.
         self.session.wire();
 
-        let pages: [(Page, gtk4::Widget); 5] = [
+        let pages: [(Page, gtk4::Widget); 6] = [
             (Page::Wifi, self.wifi.root.clone().upcast()),
             (Page::Bluetooth, self.bluetooth.root.clone().upcast()),
             (Page::Apps, self.launcher.root.clone().upcast()),
             (Page::Session, self.session.root.clone().upcast()),
             (Page::About, self.about.clone().upcast()),
+            (Page::Notifications, self.notifications_root.clone().upcast()),
         ];
         for (page, child) in pages {
             self.stack.add_named(&child, Some(page.stack_name()));
@@ -756,7 +783,83 @@ impl QuickSettings {
         self.stack.set_visible_child_name("root");
     }
 
+    fn refresh_notifications(self: &Rc<Self>) {
+        let daemon = crate::service::notification::get();
+        let notifications = daemon.visible();
+        let _deferred = daemon.deferred_count();
+
+        while let Some(child) = self.notifications_rows.first_child() {
+            self.notifications_rows.remove(&child.upcast::<gtk4::Widget>());
+        }
+
+        for notification in notifications {
+            let row = gtk4::ListBoxRow::new();
+            row.add_css_class("ra-notification-row");
+            row.set_selectable(false);
+            row.set_activatable(false);
+
+            let layout = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+            layout.set_margin_start(12);
+            layout.set_margin_end(12);
+            layout.set_margin_top(6);
+            layout.set_margin_bottom(6);
+
+            let app_icon = crate::icons::resolve(&notification.app_icon);
+            let icon = crate::icons::image(&app_icon, 22);
+            icon.add_css_class("ra-notification-icon");
+            layout.append(&icon);
+
+            let text = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+            text.set_hexpand(true);
+
+            let summary = gtk4::Label::builder()
+                .label(&notification.summary)
+                .xalign(0.0)
+                .build();
+            summary.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            summary.add_css_class("ra-notification-summary");
+            text.append(&summary);
+
+            let subtitle = gtk4::Label::builder()
+                .label(&format!("{} - {} · {}", notification.app_name,
+                    notification.age_label(), notification.body.chars().take(48).collect::<String>()))
+                .xalign(0.0)
+                .build();
+            subtitle.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            subtitle.add_css_class("ra-notification-subtitle");
+            text.append(&subtitle);
+
+            layout.append(&text);
+
+            let close = gtk4::Button::builder()
+                .icon_name("window-close-symbolic")
+                .css_classes(["ra-round-button", "ra-notification-close"])
+                .build();
+            let close_id = notification.id;
+            close.connect_clicked({
+                let daemon = daemon.clone();
+                move |_| {
+                    daemon.close(close_id);
+                }
+            });
+            layout.append(&close);
+
+            row.set_child(Some(&layout));
+            self.notifications_rows.append(&row);
+        }
+
+        // Deferred counter shown in the subtitle row of the DND tile only,
+        // not duplicated in the notifications list itself.
+        self.battery_pill.set_visible(self.visible.get() && self.page.get() == Page::Notifications);
+    }
+
     fn wire_services(self: &Rc<Self>) {
+        if self.cfg.notifications && !self.cfg.notification_daemon {
+            // Showing the list requires owning the daemon; if the daemon is
+            // off but the list is on, warn rather than showing an empty list
+            // that looks like nothing is wrong.
+            warn!("quick_settings.notifications is true but notification_daemon is false;                     notifications will not appear until daemon is enabled");
+        }
         let mut subs = Vec::new();
 
         // Repaint only while the popup is on screen. Closing it means the
@@ -781,6 +884,19 @@ impl QuickSettings {
         subs.push(service::power::get().on_profile_change(repaint(&weak)));
         subs.push(service::brightness::get().on_change(repaint(&weak)));
         subs.push(service::nightlight::get(None, None).on_change(repaint(&weak)));
+
+        // Notifications: rebuild only when a message arrives or DND changes,
+        // not on every service refresh, so the list stays readable.
+        subs.push(crate::service::notification::get().on_change({
+            let weak = Rc::downgrade(self);
+            move |_| {
+                if let Some(me) = weak.upgrade() {
+                    if me.visible.get() && me.page.get() == Page::Notifications {
+                        me.refresh_notifications();
+                    }
+                }
+            }
+        }));
 
         // Slider drags emit continuously; coalesce onto an idle so a drag
         // cannot queue hundreds of calls behind the pointer.

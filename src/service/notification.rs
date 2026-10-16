@@ -82,12 +82,14 @@ const INTERFACE_XML: &str = r#"<node>
 </node>"#;
 
 /// Close reasons, from the specification.
+#[allow(dead_code)]
 const REASON_EXPIRED: u32 = 1;
 const REASON_DISMISSED: u32 = 2;
 
 /// One notification, as received.
 #[derive(Clone)]
 pub struct Notification {
+    #[allow(dead_code)]
     pub id: u32,
     pub app_name: String,
     pub app_icon: String,

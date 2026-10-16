@@ -365,7 +365,7 @@ pub struct QuickSettings {
     pub poll_interval_ms: u32,
     /// Show the notification list below the tiles.
     #[serde(default = "default_true")]
-    pub notifications: bool,
+    pub notifications: bool, // Read by build_pages; used at build time
     /// Become the notification server, claiming `org.freedesktop.Notifications`.
     ///
     /// Off by default on purpose. Turning it on routes every notification on
