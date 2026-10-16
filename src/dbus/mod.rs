@@ -402,8 +402,10 @@ pub fn reply_value(v: glib::Variant) -> glib::Variant {
 /// Read an `as` (array of strings), accepting both a bare array and a
 /// single-element tuple wrapping one.
 pub fn as_strv(v: &glib::Variant) -> Vec<String> {
-    let value = unwrap(v);
-    let value = reply_value(value);
+    let value = reply_value(unwrap(v));
+    if !value.is_container() {
+        return Vec::new();
+    }
     value.iter().filter_map(|c| c.str().map(str::to_string)).collect()
 }
 
@@ -414,15 +416,57 @@ pub fn as_bytes_str(v: &glib::Variant) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-/// Build an `a{sv}` from string keys and already-built variants.
+/// Build an `a{sv}` from string keys and already-built values.
 ///
-/// glib 0.22 dropped the `Variant::from_a{sv}` convenience constructors, so
-/// `a{sv}` has to be assembled from `{sv}` dict entries.
+/// glib 0.22 dropped the `Variant::from_a{sv}` constructors, and the remaining
+/// primitives are traps:
+///
+/// * `Variant::from_dict_entry` builds the *concrete* type of the entry
+///   (`{sb}`, `{su}`, ...), not the fixed `{sv}` that `a{sv}` requires, so
+///   combining them fails an assertion at runtime;
+/// * glib-rs exposes no `g_variant_new_variant`, so a bare `v` cannot be
+///   constructed to fill the entry by hand.
+///
+/// What does work is parsing with the container type supplied: GVariant coerces
+/// each value to the declared `v` itself. The values are printed back as
+/// GVariant text, which is lossless and handles escaping, so this is exact for
+/// every type including byte arrays.
+///
+/// The round trip costs a few microseconds and happens once per network join,
+/// never on a hot path.
 pub fn vardict(entries: Vec<(String, glib::Variant)>) -> glib::Variant {
-    use glib::variant::DictEntry;
-    glib::Variant::array_from_iter::<DictEntry<String, glib::Variant>>(
-        entries.into_iter().map(|(k, v)| glib::Variant::from_dict_entry(&k.to_variant(), &v)),
-    )
+    let body = entries
+        .iter()
+        .map(|(key, value)| {
+            // `print` produces properly quoted GVariant text for both halves,
+            // so a key containing a quote or a backslash cannot break this.
+            let key_text = glib::Variant::from(key.as_str()).print(false);
+            format!("{key_text}: <{}>", value.print(false))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let text = format!("@a{{sv}} {{ {body} }}");
+    match glib::Variant::parse(Some(dict_type()), &text) {
+        Ok(dict) => dict,
+        Err(e) => {
+            crate::error!("cannot build a{{sv}} ({e}); sending an empty dict instead");
+            empty_dict()
+        }
+    }
+}
+
+/// The `a{sv}` container type.
+///
+/// `VariantTy::new` borrows from its argument, so passing a literal yields a
+/// `&'static` type with no allocation and no interning table.
+fn dict_type() -> &'static glib::VariantTy {
+    glib::VariantTy::new("a{sv}").expect("`a{sv}` is a valid GVariant type")
+}
+
+/// An `a{sv}` with no entries, for calls that take an options map.
+pub fn empty_dict() -> glib::Variant {
+    glib::Variant::parse(Some(dict_type()), "@a{sv} {}").expect("an empty a{sv} always parses")
 }
 
 /// Spawn a future on the GLib main context without pulling in an executor.
@@ -510,5 +554,106 @@ impl<T> Clone for Emitter<T> {
 impl<T: 'static> Default for Emitter<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gtk4::prelude::ToVariant;
+
+    /// Build an `as` for the tests. Parsing is the only construction that works
+    /// for a homogeneous string array in glib-rs 0.22.
+    fn string_array(items: &[&str]) -> glib::Variant {
+        let list = items.iter().map(|s| format!("'{}'", s.replace('\'', "\\'"))).collect::<Vec<_>>().join(", ");
+        glib::Variant::parse(Some(glib::VariantTy::new("as").unwrap()), &format!("[{list}]"))
+            .expect("a string array always parses")
+    }
+
+    /// A D-Bus reply is always a tuple. A method declared `-> ao` wraps the
+    /// array in a one-element tuple, and reading the reply directly yields
+    /// *nothing at all* rather than an error, which is the failure mode that
+    /// made every list in the panel come back empty.
+    #[test]
+    fn reply_value_unwraps_a_single_valued_reply() {
+        let array = string_array(&["/a", "/b"]);
+        let reply = glib::Variant::tuple_from_iter([&array]);
+        assert_eq!(reply.n_children(), 1);
+
+        let value = reply_value(reply);
+        assert_eq!(value.type_(), array.type_());
+        assert_eq!(as_strv(&value), vec!["/a", "/b"]);
+    }
+
+    #[test]
+    fn reply_value_leaves_multi_valued_replies_alone() {
+        let reply = glib::Variant::tuple_from_iter([&"a".to_variant(), &"b".to_variant()]);
+        assert_eq!(reply_value(reply).n_children(), 2);
+    }
+
+    /// A non-container must not reach `n_children()`: GVariant asserts, and a
+    /// panel that aborts on a malformed reply is worse than one that degrades.
+    #[test]
+    fn reply_value_tolerates_a_bare_value() {
+        let bare = "not a container".to_variant();
+        assert_eq!(reply_value(bare.clone()), bare);
+        assert_eq!(as_strv(&bare), Vec::<String>::new());
+    }
+
+    #[test]
+    fn variant_to_dict_unpacks_two_column_entries() {
+        let map = vardict(vec![
+            ("Name".to_string(), "Built-in".to_variant()),
+            ("Powered".to_string(), true.to_variant()),
+        ]);
+        let parsed = variant_to_dict(map);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed.get("Name").and_then(as_str).as_deref(), Some("Built-in"));
+        assert_eq!(parsed.get("Powered").and_then(as_bool), Some(true));
+    }
+
+    #[test]
+    fn variant_to_dict_ignores_non_dict_entries() {
+        // An array of plain values, handed in by mistake, must not panic.
+        assert!(variant_to_dict(string_array(&["x", "y"])).is_empty());
+    }
+
+    /// UPower reports `Percentage` as a double, and NetworkManager reports
+    /// `Strength` as a byte. Reading either with the wrong accessor must return
+    /// `None`, never a wrong number.
+    #[test]
+    fn typed_accessors_reject_the_wrong_type() {
+        assert_eq!(as_u8(&78.0_f64.to_variant()), None);
+        assert_eq!(as_u32(&true.to_variant()), None);
+        assert_eq!(as_f64(&78_u8.to_variant()), None);
+        assert_eq!(as_u8(&78_u8.to_variant()), Some(78));
+    }
+
+    #[test]
+    fn unwrap_strips_only_one_level_of_variant() {
+        let inner = 42_u32.to_variant();
+        let wrapped = glib::Variant::from_variant(&inner);
+        assert!(wrapped.type_().is_variant());
+        assert_eq!(unwrap(&wrapped).get::<u32>(), Some(42));
+
+        let not_wrapped = 42_u32.to_variant();
+        assert_eq!(unwrap(&not_wrapped).get::<u32>(), Some(42));
+    }
+
+    /// `/` is D-Bus's "no object" and must not become a real path.
+    #[test]
+    fn a_root_path_reads_as_absent() {
+        assert_eq!(as_path(&"/".to_variant()), None);
+        assert_eq!(as_path(&"/org/bluez/hci0".to_variant()), Some("/org/bluez/hci0".into()));
+        // Not a path at all.
+        assert_eq!(as_path(&"nonsense".to_variant()), None);
+    }
+
+    /// SSIDs arrive as a byte array; a non-UTF-8 one must degrade, not panic.
+    #[test]
+    fn byte_arrays_decode_and_survive_invalid_utf8() {
+        let good = glib::Variant::from(vec![b'h', b'i']);
+        assert_eq!(as_bytes_str(&good).as_deref(), Some("hi"));
+        let bad = glib::Variant::from(vec![0xff_u8, 0xfe]);
+        assert_eq!(as_bytes_str(&bad), None);
     }
 }

@@ -301,11 +301,19 @@ impl<'de> Deserialize<'de> for MonitorSpec {
             NamedTable { monitor: String },
         }
         Ok(match Raw::deserialize(d)? {
-            Raw::Named(s) | Raw::NamedTable { monitor: s } => match s.to_ascii_lowercase().as_str() {
-                "primary" | "first" | "*" | "any" => MonitorSpec::First,
-                "all" => MonitorSpec::All,
-                other => MonitorSpec::Named(other.to_string()),
-            },
+            Raw::Named(s) | Raw::NamedTable { monitor: s } => {
+                let trimmed = s.trim();
+                // Only the aliases are case-insensitive. A connector name is
+                // *not*: `eDP-1` and `DP-2` are different physical ports, and
+                // lowercasing them would make the log misreport what is on
+                // screen. Matching in `Monitor::resolve` is already
+                // case-insensitive, so this is purely about reporting fidelity.
+                match trimmed.to_ascii_lowercase().as_str() {
+                    "primary" | "first" | "*" | "any" => MonitorSpec::First,
+                    "all" => MonitorSpec::All,
+                    _ => MonitorSpec::Named(trimmed.to_string()),
+                }
+            }
         })
     }
 }
@@ -565,4 +573,170 @@ pub fn user_config_path() -> PathBuf {
             home.join(".config")
         });
     base.join("ra").join("config.toml")
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The configuration the installer ships must always parse. If it does not,
+    /// every first run starts on the built-in fallback instead of the documented
+    /// defaults, which is exactly the kind of bug nobody notices.
+    #[test]
+    fn shipped_default_config_is_valid() {
+        let config = Config::parse(DEFAULT_CONFIG).expect("config/ra.toml must parse");
+        assert_eq!(config.panels.len(), 2, "the default ships a bar and a dock");
+        assert!(!config.panels[0].left.is_empty());
+        assert!(!config.panels[0].center.is_empty());
+        assert!(!config.panels[0].right.is_empty());
+        assert_eq!(config.panels[0].edge, Edge::Top);
+        assert_eq!(config.panels[1].edge, Edge::Bottom);
+        assert!(config.quick_settings.enabled);
+    }
+
+    #[test]
+    fn every_module_in_the_default_config_exists() {
+        let config = Config::parse(DEFAULT_CONFIG).unwrap();
+        for name in config.module_names() {
+            assert!(
+                crate::module::known().contains(&name.as_str()),
+                "the default config uses `{name}`, which this build does not provide"
+            );
+        }
+    }
+
+    #[test]
+    fn a_slot_can_be_a_name_a_table_or_a_group() {
+        let config = Config::parse(
+            r#"
+            [[panel]]
+            left = [
+              "launcher",
+              { module = "clock", class = "big", args = { format = "%H" } },
+              { name = "status", class = "s", modules = ["network", "volume"] },
+            ]
+            "#,
+        )
+        .unwrap();
+
+        let slots = &config.panels[0].left;
+        assert!(matches!(&slots[0], Slot::Module(ModuleRef::Name(n)) if n == "launcher"));
+
+        match &slots[1] {
+            Slot::Module(ModuleRef::Detailed(spec)) => {
+                assert_eq!(spec.module, "clock");
+                assert_eq!(spec.class.as_deref(), Some("big"));
+            }
+            other => panic!("expected a detailed module, got {other:?}"),
+        }
+
+        match &slots[2] {
+            Slot::Group(group) => {
+                assert_eq!(group.name, "status");
+                assert_eq!(group.modules.len(), 2);
+            }
+            other => panic!("expected a group, got {other:?}"),
+        }
+
+        assert_eq!(config.module_names(), vec!["clock", "launcher", "network", "volume"]);
+    }
+
+    #[test]
+    fn monitor_accepts_both_spellings() {
+        let from_string = Config::parse("[[panel]]\nmonitor = \"DP-2\"\n").unwrap();
+        assert_eq!(from_string.panels[0].monitor, MonitorSpec::Named("DP-2".into()));
+
+        // `primary` is an alias for the first output: GTK4 dropped the
+        // primary-monitor concept, so this is what people actually type.
+        for alias in ["primary", "first", "*", "any"] {
+            let config = Config::parse(&format!("[[panel]]\nmonitor = \"{alias}\"\n")).unwrap();
+            assert_eq!(config.panels[0].monitor, MonitorSpec::First, "alias {alias}");
+        }
+        assert_eq!(
+            Config::parse("[[panel]]\nmonitor = \"all\"\n").unwrap().panels[0].monitor,
+            MonitorSpec::All
+        );
+    }
+
+    /// A misspelled structural key must be a startup error, not a setting that
+    /// silently does nothing.
+    #[test]
+    fn unknown_structural_keys_are_rejected() {
+        assert!(Config::parse("[[panel]]\nedg = \"top\"\n").is_err());
+        assert!(Config::parse("[[panel]]\nleft = [{ modul = \"clock\" }]\n").is_err());
+        assert!(Config::parse("[style]\nfolow_gtk_theme = true\n").is_err());
+    }
+
+    /// Module arguments are the module's own business, so unknown keys there
+    /// are its problem, not the schema's.
+    #[test]
+    fn unknown_module_args_are_left_to_the_module() {
+        let config = Config::parse(
+            r#"
+            [[panel]]
+            left = [{ module = "clock", args = { formt = "%H" } }]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(config.panels[0].left.len(), 1);
+    }
+
+    #[test]
+    fn includes_are_expanded() {
+        let config = Config::parse(
+            r#"
+            [include]
+            status = ["network", "volume"]
+
+            [[panel]]
+            left = ["launcher", "@status"]
+            "#,
+        )
+        .unwrap();
+
+        let expanded = Config::expand_slots(&config.panels[0].left, &config.include);
+        let names: Vec<String> = expanded
+            .iter()
+            .map(|s| match s {
+                Slot::Module(m) => m.spec().module,
+                Slot::Group(_) => "group".into(),
+            })
+            .collect();
+        assert_eq!(names, vec!["launcher", "network", "volume"]);
+    }
+
+    #[test]
+    fn a_missing_include_is_left_alone_rather_than_dropped() {
+        let config = Config::parse("[[panel]]\nleft = [\"@nope\"]\n").unwrap();
+        let expanded = Config::expand_slots(&config.panels[0].left, &config.include);
+        assert_eq!(expanded.len(), 1, "an unresolved include stays visible as a config error");
+    }
+
+    /// A self-referential include must terminate rather than hang startup.
+    #[test]
+    fn include_recursion_is_bounded() {
+        let mut includes = BTreeMap::new();
+        includes.insert("loop".to_string(), vec![Slot::Module(ModuleRef::Name("@loop".into()))]);
+        let slots = vec![Slot::Module(ModuleRef::Name("@loop".into()))];
+        let expanded = Config::expand_slots(&slots, &includes);
+        assert!(expanded.len() <= 9, "expansion terminated with {} entries", expanded.len());
+    }
+
+    #[test]
+    fn module_args_default_when_absent_or_wrong() {
+        let spec = ModuleSpec { module: "clock".into(), class: None, args: None };
+        assert_eq!(spec.args_as::<Shape>(), Shape::default());
+
+        let bad = ModuleSpec {
+            module: "clock".into(),
+            class: None,
+            args: Some(toml::toml! { format = 42 }.into()),
+        };
+        assert_eq!(bad.args_as::<Shape>(), Shape::default(), "bad args fall back, they do not panic");
+    }
+
+    #[derive(Debug, Default, PartialEq, Deserialize)]
+    struct Shape {
+        #[serde(default)]
+        format: Option<String>,
+    }
 }

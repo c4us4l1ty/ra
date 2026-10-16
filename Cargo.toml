@@ -6,10 +6,14 @@ rust-version = "1.85"
 description = "A modular, near-zero-cost panel for XFCE/Wayland written in Rust and GTK4"
 license = "MIT"
 readme = "README.md"
+repository = "https://github.com/c4us4l1ty/ra"
+keywords = ["panel", "xfce", "wayland", "gtk4", "wlr-layer-shell"]
+categories = ["gui"]
 
-# Deliberately minimal: gtk4 pulls in glib/gio/gdk/pango/cairo/gdk-pixbuf
-# transitively, so we get a full D-Bus client, main loop and settings system
-# for free. No tokio, no relm4, no async runtime, no HTTP client, no database.
+# Deliberately minimal. `gtk4` pulls in glib, gio, gdk, pango and cairo
+# transitively, so a complete D-Bus client, main loop, settings system and CSS
+# engine come for free. No async runtime, no D-Bus crate, no HTTP client, no
+# database, no icon catalogue.
 [dependencies]
 gtk4 = { version = "0.11", features = ["v4_12"] }
 gtk4-layer-shell = "0.8"
@@ -20,5 +24,7 @@ toml = { version = "0.9", default-features = false, features = ["parse", "serde"
 opt-level = 3
 lto = "fat"
 codegen-units = 1
+# A panel that panics is a panel the user cannot get back without a logout, and
+# there is no unwinding to do at runtime anyway.
 panic = "abort"
 strip = true

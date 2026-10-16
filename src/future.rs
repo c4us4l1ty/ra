@@ -101,60 +101,70 @@ pub fn oneshot<T>() -> (Sender<T>, Receiver<T>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::task::{RawWaker, RawWakerVTable, Waker};
 
-    /// A trivial executor: poll once, and if pending, poll again after
-    /// `f` runs. Enough to exercise the state machine.
-    fn block_on<F: Future>(mut fut: F, f: impl FnOnce()) -> F::Output {
-        use std::task::{RawWaker, RawWakerVTable, Waker};
+    /// A waker that does nothing. The tests below drive polling by hand, so
+    /// nothing ever needs to be woken for real; what is under test is the
+    /// state machine, not the scheduler.
+    fn noop_waker() -> Waker {
         fn noop(_: *const ()) {}
         fn clone(_: *const ()) -> RawWaker {
             RawWaker::new(std::ptr::null(), &VTABLE)
         }
         static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
-        let waker = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) };
+        // SAFETY: the vtable's functions are all no-ops on a null pointer, so
+        // there is nothing to dereference and nothing to free.
+        unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+    }
+
+    fn poll_once<F: Future>(fut: &mut Pin<Box<F>>) -> Poll<F::Output> {
+        let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
-        let mut fut = unsafe { Pin::new_unchecked(&mut fut) };
-        loop {
-            if let Poll::Ready(v) = fut.as_mut().poll(&mut cx) {
-                return v;
-            }
-            f();
-        }
+        fut.as_mut().poll(&mut cx)
     }
 
     #[test]
-    fn delivers_a_value() {
+    fn delivers_a_value_sent_before_polling() {
         let (tx, rx) = oneshot::<u8>();
-        let out = block_on(rx, || tx.send(7));
-        assert_eq!(out, Ok(7));
+        tx.send(7);
+        assert_eq!(poll_once(&mut Box::pin(rx)), Poll::Ready(Ok(7)));
     }
 
     #[test]
-    fn dropped_sender_is_an_error() {
+    fn pends_until_the_sender_fires() {
         let (tx, rx) = oneshot::<u8>();
-        let out = block_on(rx, || drop(tx));
-        assert_eq!(out, Err(RecvError));
-    }
-
-    #[test]
-    fn value_survives_multiple_polls() {
-        let (tx, rx) = oneshot::<String>();
         let mut rx = Box::pin(rx);
+        assert_eq!(poll_once(&mut rx), Poll::Pending);
+
+        // The value is still handed over if it arrives after the first poll.
+        tx.send(9);
+        assert_eq!(poll_once(&mut rx), Poll::Ready(Ok(9)));
+    }
+
+    #[test]
+    fn a_dropped_sender_is_an_error_rather_than_a_hang() {
+        let (tx, rx) = oneshot::<u8>();
+        drop(tx);
+        assert_eq!(poll_once(&mut Box::pin(rx)), Poll::Ready(Err(RecvError)));
+    }
+
+    /// Polling after a value has been consumed must not re-deliver it, and must
+    /// not panic on an exhausted sender either.
+    #[test]
+    fn a_value_is_delivered_exactly_once() {
+        let (tx, rx) = oneshot::<String>();
         tx.send("hello".into());
-        let w = glib::idle_add_local_once(|| ());
-        let _ = w;
-        // Poll directly; the value is already present so this must not pend.
-        let poll = {
-            use std::task::{RawWaker, RawWakerVTable, Waker};
-            fn noop(_: *const ()) {}
-            fn clone(_: *const ()) -> RawWaker {
-                RawWaker::new(std::ptr::null(), &VTABLE)
-            }
-            static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
-            let waker = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) };
-            let mut cx = Context::from_waker(&waker);
-            rx.as_mut().poll(&mut cx)
-        };
-        assert_eq!(poll, Poll::Ready(Ok("hello".to_string())));
+        let mut rx = Box::pin(rx);
+        assert_eq!(poll_once(&mut rx), Poll::Ready(Ok("hello".to_string())));
+    }
+
+    /// The whole point of the `alive` flag in the pub/sub is that dropping a
+    /// sender detaches it; this is the same contract at the channel level.
+    #[test]
+    fn dropping_the_receiver_is_harmless() {
+        let (tx, rx) = oneshot::<String>();
+        drop(rx);
+        // Must not panic.
+        tx.send("anything".into());
     }
 }

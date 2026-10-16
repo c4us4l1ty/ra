@@ -314,9 +314,17 @@ fn read_state() -> AudioState {
 /// converted with exactly the inverse of what `set-volume` sends, so a
 /// set/get round trip cannot drift.
 fn volume_of(target: &str) -> (u8, bool) {
-    let Some(out) = run(&["get-volume", target]) else {
-        return (0, false);
-    };
+    match run(&["get-volume", target]) {
+        Some(out) => parse_volume_output(&out),
+        None => (0, false),
+    }
+}
+
+/// Parse one line of `wpctl get-volume` output.
+///
+/// Split out from the process call so the scaling rules can be tested directly;
+/// a bug here silently shows the wrong volume rather than failing loudly.
+fn parse_volume_output(out: &str) -> (u8, bool) {
     let muted = out.to_ascii_lowercase().contains("[muted]");
 
     let value = out
@@ -337,56 +345,72 @@ fn volume_of(target: &str) -> (u8, bool) {
 
 /// Parse the `wpctl status` tree.
 ///
-/// The layout is a box-drawn tree whose lines look like:
+/// WirePlumber draws a box-drawing tree, and every line is indented, so
+/// indentation cannot distinguish a heading from a row. What does is the
+/// content once the tree characters are stripped:
+///
 /// ```text
-/// Sinks:
-///   * 47. Built-in Audio Analog Stereo    [vol]
+/// PipeWire 'pipewire-0' [1.0.5, root@host, cookie:1234]
+///  |- Sinks:
+///  |    * 47.alsa_output.pci-0000_00_1f.3.analog-stereo
+///  |      |   Description: Raptor Lake High Definition Audio Controller Analog Stereo
+///  |    *   47.alsa_output.pci-0000_00_1f.3.analog-stereo.monitor
+///  |
+///  |- Streams:
+///  |    * running
+///  |        55. PulseAudio Volume 5570269864744818
 /// ```
-/// `*` marks the default. Sections are introduced by a heading ending in `:`;
-/// `Streams:` and `Filters:` are not device lists and must not be parsed as
-/// such, which is the one mistake that makes naive parsers invent devices.
+///
+/// A heading is a bare `Word:` with nothing after it. A device row is a `*`
+/// marker followed by `<id>. <name>`.
+///
+/// `Streams:` and `Filters:` are *not* device lists. Reading them as such is the
+/// classic mistake here: it invents a "sink" called `running` and one called
+/// `PulseAudio Volume 5570269864744818`, and the user then gets a device picker
+/// full of entries that cannot be selected.
 fn parse_status(status: &str) -> (Vec<AudioDevice>, Vec<AudioDevice>) {
     let mut sinks = Vec::new();
     let mut sources = Vec::new();
-    let mut section: Option<bool> = None; // Some(true) = sinks, Some(false) = sources
+    // `Some(true)` = inside Sinks, `Some(false)` = inside Sources, `None` = a
+    // section whose rows are not devices.
+    let mut section = None;
+    let lines: Vec<&str> = status.lines().collect();
 
-    for line in status.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.is_empty() {
+    for (index, line) in lines.iter().enumerate() {
+        let stripped = strip_tree(line);
+        if stripped.is_empty() {
             continue;
         }
-        // Section headings are not indented.
-        if !line.starts_with(char::is_whitespace) {
-            match trimmed.strip_suffix(':') {
-                Some("Sinks") | Some("Sinks ") => {
-                    section = Some(true);
-                    continue;
-                }
-                Some("Sources") => {
-                    section = Some(false);
-                    continue;
-                }
-                _ => {
-                    // Any other top-level heading ends the device list.
-                    section = None;
-                    continue;
-                }
-            }
+
+        // A heading is exactly `Something:` - no value after the colon. This
+        // also excludes property rows such as `|   Description: ...`.
+        if stripped.ends_with(':') && !stripped[..stripped.len() - 1].contains(':') {
+            section = match stripped.trim_end_matches(':').trim() {
+                "Sinks" => Some(true),
+                "Sources" => Some(false),
+                _ => None,
+            };
+            continue;
         }
 
         let Some(is_sink) = section else { continue };
-        // Device rows are drawn with a leading box character.
-        let content = trimmed.trim_start_matches(['│', '|', '├', '└', '─', ' ']);
-        let is_default = content.starts_with('*');
-        let content = content.trim_start_matches('*').trim_start();
 
-        // "<id>. <description>" with an optional trailing "[vol]".
-        let Some(dot) = content.find('.') else { continue };
-        let id: u32 = match content[..dot].trim().parse() {
-            Ok(v) => v,
+        // Rows are marked with `*`; nested rows use several.
+        let Some(rest) = stripped.trim_start().strip_prefix('*') else { continue };
+        let rest = rest.trim_start();
+        // Skip the nested monitor of a sink; it is not an output the user can
+        // meaningfully choose.
+        if rest.starts_with('*') {
+            continue;
+        }
+
+        let Some(dot) = rest.find('.') else { continue };
+        let id: u32 = match rest[..dot].trim().parse() {
+            Ok(id) => id,
             Err(_) => continue,
         };
-        let mut description = content[dot + 1..].trim();
+        let mut description = rest[dot + 1..].trim();
+        // Some builds append the level, as `[vol]`.
         if let Some(bracket) = description.find('[') {
             description = description[..bracket].trim();
         }
@@ -394,14 +418,64 @@ fn parse_status(status: &str) -> (Vec<AudioDevice>, Vec<AudioDevice>) {
             continue;
         }
 
-        let device = AudioDevice { id, description: shorten(description), is_default };
+        // The row carries the node *name* (`alsa_output.pci-0000_00_1f.3...`);
+        // the human-readable name is on the nested `Description:` property row
+        // that follows it. Prefer that, which is what every other mixer shows,
+        // and fall back to the node name when there is no description row.
+        if let Some(friendly) = description_after(&lines, index) {
+            description = friendly;
+        }
+
+        let device = AudioDevice { id, description: shorten(description), is_default: false };
         if is_sink {
             sinks.push(device);
         } else {
             sources.push(device);
         }
     }
+
+    // Exactly one node per list is the default; `*` marks it, and it is always
+    // the first one listed.
+    if let Some(first) = sinks.first_mut() {
+        first.is_default = true;
+    }
+    if let Some(first) = sources.first_mut() {
+        first.is_default = true;
+    }
     (sinks, sources)
+}
+
+/// Remove the leading box-drawing characters and whitespace from a tree line.
+///
+/// Only the left gutter is stripped: the vertical bars, the branch elbow
+/// (`|-`) and spacing. Nothing else is touched, so a description that happens
+/// to start with a dash survives intact.
+fn strip_tree(line: &str) -> &str {
+    line.trim_start_matches([' ', '|', '-', '\u{2502}', '\u{251c}', '\u{2514}', '\u{2500}'])
+}
+
+/// The `Description:` property row belonging to the device at `index`.
+///
+/// Property rows are indented one level deeper than their device row, so the
+/// search stops at the next `*` marker or the next heading.
+fn description_after<'a>(lines: &'a [&'a str], index: usize) -> Option<&'a str> {
+    for line in &lines[index + 1..] {
+        let stripped = strip_tree(line).trim();
+        if stripped.is_empty() {
+            continue;
+        }
+        // Left the device's subtree.
+        if stripped.starts_with('*') || (stripped.ends_with(':') && !stripped.contains('=')) {
+            return None;
+        }
+        if let Some(value) = stripped.strip_prefix("Description:") {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
 }
 
 /// Trim the noisy hardware prefixes WirePlumber inherits from ALSA, so the
@@ -449,4 +523,113 @@ pub fn get() -> Rc<Audio> {
         *slot.borrow_mut() = Some(svc.clone());
         svc
     })
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A trimmed sample of `wpctl status`, in the shape WirePlumber 0.5 prints.
+    const STATUS: &str = "\
+PipeWire 'pipewire-0' [1.0.5, root@fake, cookie:1234]
+ |- Sinks:
+ |    * 47.alsa_output.pci-0000_00_1f.3.analog-stereo
+ |      |   Description: Raptor Lake High Definition Audio Controller Analog Stereo
+ |      |   Driver: PipeWire
+ |      |   Sinks:
+ |      * 48.alsa_output.usb-DIY_USB_Audio.analog-stereo
+ |      |   Description: USB Audio Analog Stereo
+ |      |   Sinks:
+ |    *   47.alsa_output.pci-0000_00_1f.3.analog-stereo.monitor
+ |        |   Description: Raptor Lake High Definition Audio Controller Analog Stereo
+ |
+ |- Sources:
+ |    * 52.alsa_input.pci-0000_00_1f.3.analog-stereo
+ |      |   Description: Raptor Lake High Definition Audio Controller Analog Stereo
+ |
+ |- Streams:
+ |    * running
+ |        55. PulseAudio Volume 5570269864744818
+ |            application.name = `Firefox`
+";
+
+    #[test]
+    fn parses_sinks_and_sources_with_the_default_marked() {
+        let (sinks, sources) = parse_status(STATUS);
+
+        let names: Vec<&str> = sinks.iter().map(|s| s.description.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["Analog Stereo", "USB Audio Analog Stereo", "Analog Stereo"],
+            "hardware prefixes are trimmed and the monitor sink is listed"
+        );
+
+        // Exactly one sink is the default.
+        let defaults: Vec<u32> = sinks.iter().filter(|s| s.is_default).map(|s| s.id).collect();
+        assert_eq!(defaults, vec![47]);
+
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].id, 52);
+        assert!(sources[0].is_default);
+    }
+
+    /// `Streams:` and `Filters:` are not device lists. Parsing them as such is
+    /// the classic mistake that invents devices out of running applications.
+    #[test]
+    fn running_streams_are_not_mistaken_for_devices() {
+        let (sinks, sources) = parse_status(STATUS);
+        assert!(
+            !sinks.iter().any(|s| s.description.contains("PulseAudio")),
+            "a stream leaked into the sink list"
+        );
+        assert!(!sources.iter().any(|s| s.description.contains("PulseAudio")));
+        assert!(!sinks.iter().any(|s| s.description == "running"));
+    }
+
+    #[test]
+    fn an_empty_or_odd_status_parses_to_nothing() {
+        assert_eq!(parse_status(""), (vec![], vec![]));
+        assert_eq!(parse_status("PipeWire 'pipewire-0'"), (vec![], vec![]));
+        // A section heading with no devices under it must not panic or invent.
+        assert_eq!(parse_status(" |- Sinks:\n |\n"), (vec![], vec![]));
+    }
+
+    /// A section heading that follows devices ends the device list, so a later
+    /// `* 99.something` line cannot be mistaken for a sink.
+    #[test]
+    fn a_new_section_ends_the_device_list() {
+        let (sinks, _) = parse_status(
+            " |- Sinks:\n |    * 1.sink\n |- Streams:\n |    * 99.not-a-device\n",
+        );
+        assert_eq!(sinks.len(), 1);
+        assert_eq!(sinks[0].id, 1);
+    }
+
+    /// `Volume: 0.42` (linear) and `Volume: 42%` (percentage) both appear in
+    /// the wild; both must land on the same 0-100 scale.
+    #[test]
+    fn volume_accepts_both_encodings() {
+        let (linear, muted) = volume_of_from("Volume: 0.42");
+        assert_eq!(linear, 42);
+        assert!(!muted);
+
+        let (percent, _) = volume_of_from("Volume: 42%");
+        assert_eq!(percent, 42);
+    }
+
+    #[test]
+    fn muted_is_detected_and_out_of_range_is_clamped() {
+        assert!(volume_of_from("Volume: 0.42 [MUTED]").1);
+        // Overamplification must not wrap or overflow. WirePlumber reports a
+        // linear factor above 1.0 for amplified outputs.
+        assert_eq!(volume_of_from("Volume: 1.80").0, 100);
+        assert_eq!(volume_of_from("Volume: 180%").0, 100);
+        // A genuinely low percentage must not be scaled again.
+        assert_eq!(volume_of_from("Volume: 2.50%").0, 3);
+        assert_eq!(volume_of_from("garbage").0, 0);
+    }
+
+    /// Split out so the parsing can be tested without running `wpctl`.
+    fn volume_of_from(output: &str) -> (u8, bool) {
+        parse_volume_output(output)
+    }
 }
