@@ -530,9 +530,11 @@ impl QuickSettings {
         self.notifications_scroll.set_propagate_natural_height(true);
         self.notifications_scroll.set_max_content_height(180);
         self.notifications_scroll.set_child(Some(&self.notifications_rows));
-        self.notifications_root.append(&self.notifications_scroll);
-        self.notifications_root.set_size_request(-1, 150);
-        root.append(&self.notifications_root);
+        if self.cfg.notifications {
+            self.notifications_root.append(&self.notifications_scroll);
+            self.notifications_root.set_size_request(-1, 150);
+            root.append(&self.notifications_root);
+        }
 
         root.append(&self.volume_row.root);
         root.append(&self.brightness_row.root);

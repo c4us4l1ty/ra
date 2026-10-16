@@ -364,7 +364,7 @@ pub struct QuickSettings {
     #[serde(default = "default_poll_ms")]
     pub poll_interval_ms: u32,
     /// Show the notification list below the tiles.
-    #[serde(default = "default_true")]
+    #[serde(default = "default_false")]
     pub notifications: bool, // Read by build_pages; used at build time
     /// Become the notification server, claiming `org.freedesktop.Notifications`.
     ///
@@ -378,6 +378,9 @@ pub struct QuickSettings {
 
 fn default_true() -> bool {
     true
+}
+fn default_false() -> bool {
+    false
 }
 fn default_popup_width() -> u32 {
     380

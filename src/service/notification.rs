@@ -123,12 +123,10 @@ impl Notification {
 
 /// Whether we are the notification server, and why not if we are not.
 #[derive(Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum Daemon {
-    /// Not configured to be a daemon at all.
     Off,
-    /// We own the bus name and are receiving notifications.
     Running,
-    /// Another process owns the name and ours was refused or lost.
     Taken,
 }
 
