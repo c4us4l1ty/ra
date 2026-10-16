@@ -99,12 +99,14 @@ pub fn run(explicit_config: Option<PathBuf>, watch: bool) -> i32 {
 
     // Reload: rebuild every window from scratch. Services keep running, so this
     // costs a few milliseconds and no bus traffic.
+    // One rebuild path, used by the config watcher and by monitor hotplug, so
+    // both produce identical panels.
     let rebuild = {
         let app = app.clone();
         let windows = windows.clone();
         let current = current.clone();
         let qs = qs.clone();
-        Rc::new(move |config: Config| {
+        Rc::new(move |config: Config, reason: &str| {
             theme::install(&config.style);
             panel::warm_services(&config);
             let monitors = current_monitors();
@@ -119,15 +121,32 @@ pub fn run(explicit_config: Option<PathBuf>, watch: bool) -> i32 {
                 window.destroy();
             }
             *current.borrow_mut() = config;
-            info!("configuration applied");
+            info!("configuration applied ({reason})");
         })
     };
+
+    // A panel that says `monitor = "all"` has to follow the hardware. GDK
+    // reports plug and unplug, and the rebuild is debounced because docking
+    // emits both events in quick succession and each one rebuilds every panel.
+    if let Some(display) = gdk::Display::default() {
+        // GTK4 has no monitor signals. Monitor changes arrive as
+        // `items-changed` on the `GListModel` behind `monitors()`, which the
+        // display owns for its lifetime, so holding this subscription for the
+        // process is both safe and necessary.
+        let monitors_model = display.monitors();
+        monitors_model.connect_items_changed({
+            let rebuild = rebuild.clone();
+            let current = current.clone();
+            move |_, _, _, _| schedule_monitor_rebuild(rebuild.clone(), current.clone())
+        });
+        std::mem::forget(monitors_model);
+    }
 
     if watch && config.general.watch_config {
         let rebuild = rebuild.clone();
         let path = config_path.clone();
         let debounce = config.general.reload_debounce_ms;
-        let watcher = config::watch::watch(&path, debounce, move |config| rebuild(config.clone()));
+        let watcher = config::watch::watch(&path, debounce, move |config| rebuild(config.clone(), "config changed"));
         if watcher.is_none() {
             warn!("live reload disabled; restart ra after editing {}", path.display());
         }
@@ -279,6 +298,30 @@ pub fn diagnose(config_path: &Path) {
         for wanted in interesting {
             println!("  {wanted:<32}{}", if names.iter().any(|n| n == wanted) { "present" } else { "absent" });
         }
+    }
+}
+
+/// Rebuild the panels a moment after the monitor set settles.
+///
+/// Docking a laptop fires `monitor-added` and `monitor-removed` back to back;
+/// rebuilding on each would create and destroy every panel twice for one
+/// physical action.
+fn schedule_monitor_rebuild(
+    rebuild: Rc<dyn Fn(Config, &str)>,
+    current: Rc<RefCell<Config>>,
+) {
+    // One timer for the whole process: a second event replaces the first
+    // rather than queueing another rebuild.
+    static PENDING: std::sync::Mutex<Option<glib::SourceId>> = std::sync::Mutex::new(None);
+    if let Ok(mut pending) = PENDING.lock() {
+        if let Some(id) = pending.take() {
+            id.remove();
+        }
+        let config = current.borrow().clone();
+        let id = glib::timeout_add_local_once(std::time::Duration::from_millis(400), move || {
+            rebuild(config, "monitor changed");
+        });
+        *pending = Some(id);
     }
 }
 
