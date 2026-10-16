@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# reference checkouts, not part of this project
+/wayle/
+/quick-settings-master/

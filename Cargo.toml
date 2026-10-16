@@ -1,0 +1,24 @@
+[package]
+name = "ra"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "A modular, near-zero-cost panel for XFCE/Wayland written in Rust and GTK4"
+license = "MIT"
+readme = "README.md"
+
+# Deliberately minimal: gtk4 pulls in glib/gio/gdk/pango/cairo/gdk-pixbuf
+# transitively, so we get a full D-Bus client, main loop and settings system
+# for free. No tokio, no relm4, no async runtime, no HTTP client, no database.
+[dependencies]
+gtk4 = { version = "0.11", features = ["v4_12"] }
+gtk4-layer-shell = "0.8"
+serde = { version = "1", features = ["derive"] }
+toml = { version = "0.9", default-features = false, features = ["parse", "serde", "std"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
