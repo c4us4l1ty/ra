@@ -130,6 +130,16 @@ pub struct SliderRow {
     pub icon: gtk4::Image,
     pub slider: gtk4::Scale,
     value: gtk4::Label,
+    /// True while the slider is being written to programmatically.
+    ///
+    /// `value-changed` fires for `set_value` too, not only for a drag. Without
+    /// this the row writes the value it was just handed straight back to the
+    /// service, and a service that cannot write (a backlight the user lacks
+    /// permission for) never converges: every refresh re-triggers the write and
+    /// the log fills with the same failure once per poll interval. The guard
+    /// makes the intent explicit - the handler is for the user, `set_value` is
+    /// for the service.
+    updating: std::cell::Cell<bool>,
 }
 
 impl SliderRow {
@@ -159,18 +169,27 @@ impl SliderRow {
         // GTK emits this continuously while dragging. Services are written to
         // coalesce bursts, but throttling here as well keeps a drag from
         // queueing hundreds of D-Bus calls behind the pointer.
-        slider.connect_value_changed(move |s| {
-            let v = s.value().round().clamp(0.0, 100.0) as u8;
-            on_change(v);
+        let updating = std::cell::Cell::new(false);
+        slider.connect_value_changed({
+            let updating = updating.clone();
+            move |s| {
+                if updating.get() {
+                    return;
+                }
+                let v = s.value().round().clamp(0.0, 100.0) as u8;
+                on_change(v);
+            }
         });
 
-        Self { root, icon, slider, value }
+        Self { root, icon, slider, value, updating }
     }
 
     /// Update the handle position without re-entering the change handler.
     pub fn set_value(&self, percent: u8) {
         if (self.slider.value() - f64::from(percent)).abs() >= 0.5 {
+            self.updating.set(true);
             self.slider.set_value(f64::from(percent));
+            self.updating.set(false);
         }
         self.value.set_text(&format!("{percent}%"));
     }

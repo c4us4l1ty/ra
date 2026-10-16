@@ -43,7 +43,6 @@ enum Page {
     Apps,
     Session,
     About,
-    Notifications,
 }
 
 impl Page {
@@ -55,7 +54,6 @@ impl Page {
             Self::Apps => "apps",
             Self::Session => "session",
             Self::About => "about",
-            Self::Notifications => "notifications",
         }
     }
 }
@@ -330,9 +328,6 @@ impl QuickSettings {
                 service::bluetooth::get().set_discovering(true);
             }
             Page::Apps => self.launcher.focus_search(),
-            Page::Notifications => {
-                self.refresh_notifications();
-            }
             _ => service::bluetooth::get().set_discovering(false),
         }
     }
@@ -758,13 +753,19 @@ impl QuickSettings {
         // and for the logind permission stream.
         self.session.wire();
 
-        let pages: [(Page, gtk4::Widget); 6] = [
+        // The notification list is *not* a stack page. It is appended into the
+        // root page directly, and a GTK widget has exactly one parent: adding
+        // the same box to the stack as well makes GTK assert
+        // `_gtk_widget_get_parent (widget) == NULL` and refuse, which is where
+        // the `Gtk-CRITICAL` on every startup came from. The list belongs on
+        // the root page because that is where DND lives, and a DND toggle the
+        // user cannot see the effect of is not a toggle.
+        let pages: [(Page, gtk4::Widget); 5] = [
             (Page::Wifi, self.wifi.root.clone().upcast()),
             (Page::Bluetooth, self.bluetooth.root.clone().upcast()),
             (Page::Apps, self.launcher.root.clone().upcast()),
             (Page::Session, self.session.root.clone().upcast()),
             (Page::About, self.about.clone().upcast()),
-            (Page::Notifications, self.notifications_root.clone().upcast()),
         ];
         for (page, child) in pages {
             self.stack.add_named(&child, Some(page.stack_name()));
@@ -850,13 +851,9 @@ impl QuickSettings {
             });
             if close.parent().is_none() { layout.append(&close); }
 
-            if layout.parent().is_none() { row.append(&layout); }
-            if row.parent().is_none() { self.notifications_rows.append(&row); }
+            row.append(&layout);
+            self.notifications_rows.append(&row);
         }
-
-        // Deferred counter shown in the subtitle row of the DND tile only,
-        // not duplicated in the notifications list itself.
-        self.battery_pill.set_visible(self.visible.get() && self.page.get() == Page::Notifications);
     }
 
     fn wire_services(self: &Rc<Self>) {

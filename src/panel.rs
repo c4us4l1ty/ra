@@ -124,15 +124,33 @@ fn build_one(
     // title bar and never takes keyboard focus, which is exactly what a panel
     // should be. `attach_panel` already set `KeyboardMode::None`.
 
-    // Panels are sized to their content along the anchored axis.
-    match panel.edge {
-        Edge::Top | Edge::Bottom => {
-            window.set_default_size(-1, panel.height as i32);
-        }
-        Edge::Left | Edge::Right => {
-            window.set_default_size(panel.height as i32, -1);
+    // Panels are sized to their content along the anchored axis. Only on the
+    // layer-shell path, where the surface is stretched by the compositor: in
+    // the floating fallback the width has to be filled in from the monitor, or
+    // the window shrinks to its content and reads as a stray toolbar rather
+    // than a bar.
+    if crate::layer::supported() {
+        match panel.edge {
+            Edge::Top | Edge::Bottom => {
+                window.set_default_size(-1, panel.height as i32);
+            }
+            Edge::Left | Edge::Right => {
+                window.set_default_size(panel.height as i32, -1);
+            }
         }
     }
+
+    // Map the window. This is unconditional on purpose.
+    //
+    // A layer surface is committed as soon as it is realised, so the obvious
+    // reading is that `present()` is only needed for the floating fallback.
+    // It is not: without it the window is built, styled and configured, and
+    // never mapped. On labwc that happened to be harmless because GTK realised
+    // the surface during `init_layer_shell`; on any compositor where
+    // `wlr-layer-shell` is unavailable nothing maps the window at all and the
+    // panel is invisible while every log line says it was created. The
+    // screenshot path masked this because it presents each window itself.
+    window.present();
 
     Rc::new(PanelWindow { window, subs })
 }

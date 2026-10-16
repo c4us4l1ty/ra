@@ -61,9 +61,35 @@ pub fn attach_panel(win: &gtk4::ApplicationWindow, cfg: &Panel, monitor: Option<
     win.set_resizable(false);
 
     if !supported() {
-        // Best effort so the panel is at least usable during development.
-        win.set_default_size(1200, cfg.height as i32);
+        // Floating fallback, used on GNOME, Mutter and X11.
+        //
+        // A layer surface cannot be emulated with a normal window: it cannot be
+        // pinned to an output edge and cannot reserve space. What it can do is
+        // behave like a panel as closely as an ordinary toplevel allows, so
+        // that the thing is actually usable while developing on a compositor
+        // that does not speak the protocol:
+        //
+        // * be undecorated and sized from the monitor, so it reads as a bar
+        //   rather than a small floating dialog.
+        //
+        // What an ordinary toplevel cannot do is stay above other windows or
+        // hide from the taskbar: GTK4 removed `set_keep_above` and the skip
+        // hints, and GDK exposes no replacement. So on this path the panel is
+        // an ordinary window that the compositor is free to bury or focus.
+        // That is the cost of not speaking `wlr-layer-shell`, and it is why the
+        // fallback is a development convenience rather than a shipping target.
+        //
+        // The width comes from the monitor rather than from the content: a
+        // bar that shrink-wraps to its widgets looks like a stray toolbar.
+        win.set_decorated(false);
         win.set_title(Some(&format!("ra — {}", cfg.name)));
+        if let Some(monitor) = monitor {
+            let geo = monitor.geometry();
+            match cfg.edge {
+                CfgEdge::Top | CfgEdge::Bottom => win.set_default_size(geo.width(), cfg.height as i32),
+                CfgEdge::Left | CfgEdge::Right => win.set_default_size(cfg.height as i32, geo.height()),
+            }
+        }
         return;
     }
 

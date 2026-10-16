@@ -111,11 +111,24 @@ pub fn run(explicit_config: Option<PathBuf>, mode: Mode) -> i32 {
     panel::warm_services(&config);
     crate::service::notification::install(config.quick_settings.notification_daemon);
 
-    let monitors = current_monitors();
+    // `gdk::Display::default()` exists as soon as the display is opened, but
+    // the monitor list behind it is populated by the compositor and is empty
+    // until the first `wl_output` globals arrive. Asking too early yields zero
+    // monitors, every panel resolves to no target, and the process then sits
+    // there running with nothing on screen and one error in the log. Waiting
+    // for a non-empty list (or for the first idle, whichever comes first) is
+    // the difference between a panel and an invisible process.
+    let monitors = wait_for_monitors();
+    if monitors.is_empty() {
+        crate::error!("no monitors reported by the compositor; no panel can be placed");
+    }
     *windows.borrow_mut() = panel::build_all(&app, &config, &monitors).borrow().clone();
 
     if windows.borrow().is_empty() {
-        crate::error!("no panel windows were created; check the monitor setting");
+        crate::error!(
+            "no panel windows were created; {} monitor(s) visible, check `monitor` in the panel config",
+            monitors.len()
+        );
     }
 
     // Global key handling for the popup.
@@ -140,7 +153,6 @@ pub fn run(explicit_config: Option<PathBuf>, mode: Mode) -> i32 {
         Rc::new(move |config: Config, reason: &str| {
             theme::install(&config.style);
             panel::warm_services(&config);
-    crate::service::notification::install(config.quick_settings.notification_daemon);
             let monitors = current_monitors();
             let fresh = panel::build_all(&app, &config, &monitors);
             qs.set_anchor_offset(panel::anchor_offset(&config.panels, config.quick_settings.anchor));
@@ -197,6 +209,32 @@ pub fn run(explicit_config: Option<PathBuf>, mode: Mode) -> i32 {
     std::mem::forget(app.hold());
     app.run_with_args::<&str>(&[]);
     0
+}
+
+/// Block until the compositor has reported at least one monitor, or give up.
+///
+/// The timeout is not a guess about compositor speed, it is a bound on how long
+/// startup may be delayed by a session that will never report anything - a
+/// headless run, a nested compositor still starting, or a broken driver. On
+/// timeout the empty list is returned and the caller reports the real reason,
+/// which is better than hanging forever on a panel that can never be placed.
+fn wait_for_monitors() -> Vec<gdk::Monitor> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        let monitors = current_monitors();
+        if !monitors.is_empty() {
+            crate::debug!("{} monitor(s) reported", monitors.len());
+            return monitors;
+        }
+        if std::time::Instant::now() >= deadline {
+            warn!("no monitors after 3s; proceeding with none");
+            return Vec::new();
+        }
+        // Process pending events while waiting, otherwise the compositor's
+        // replies are never read and the list stays empty forever.
+        glib::MainContext::default().iteration(true);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 /// Every monitor GDK currently knows about.
