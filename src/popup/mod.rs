@@ -95,7 +95,7 @@ pub struct QuickSettings {
     session: Rc<SessionPage>,
     about: gtk4::Box,
     notifications_root: gtk4::Box,
-    notifications_rows: gtk4::ListBox,
+    notifications_rows: gtk4::Box,
     notifications_scroll: gtk4::ScrolledWindow,
     _subs: RefCell<Vec<Subscription>>,
 }
@@ -128,7 +128,7 @@ impl QuickSettings {
             session: Rc::new(SessionPage::new()),
             about: about_page(),
             notifications_root: ui::vbox(0),
-            notifications_rows: gtk4::ListBox::new(),
+            notifications_rows: gtk4::Box::new(gtk4::Orientation::Vertical, 4),
             notifications_scroll: gtk4::ScrolledWindow::new(),
             _subs: RefCell::new(Vec::new()),
         });
@@ -525,8 +525,7 @@ impl QuickSettings {
         // rebuilt per change: the list rows update in place, which is what
         // keeps this fast on a slow compositor.
         self.notifications_rows.add_css_class("ra-notifications-list");
-        self.notifications_rows.set_selection_mode(gtk4::SelectionMode::None);
-        self.notifications_scroll.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
+                self.notifications_scroll.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
         self.notifications_scroll.set_propagate_natural_height(true);
         self.notifications_scroll.set_max_content_height(180);
         self.notifications_scroll.set_child(Some(&self.notifications_rows));
@@ -798,10 +797,12 @@ impl QuickSettings {
         }
 
         for notification in notifications {
-            let row = gtk4::ListBoxRow::new();
+            let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
             row.add_css_class("ra-notification-row");
-            row.set_selectable(false);
-            row.set_activatable(false);
+            row.set_margin_start(12);
+            row.set_margin_end(12);
+            row.set_margin_top(6);
+            row.set_margin_bottom(6);
 
             let layout = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
             layout.set_margin_start(12);
@@ -849,7 +850,7 @@ impl QuickSettings {
             });
             if close.parent().is_none() { layout.append(&close); }
 
-            if layout.parent().is_none() { row.set_child(Some(&layout)); }
+            if layout.parent().is_none() { row.append(&layout); }
             if row.parent().is_none() { self.notifications_rows.append(&row); }
         }
 
