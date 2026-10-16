@@ -363,6 +363,17 @@ pub struct QuickSettings {
     /// Poll interval for values with no change signal (brightness), in ms.
     #[serde(default = "default_poll_ms")]
     pub poll_interval_ms: u32,
+    /// Show the notification list below the tiles.
+    #[serde(default = "default_true")]
+    pub notifications: bool,
+    /// Become the notification server, claiming `org.freedesktop.Notifications`.
+    ///
+    /// Off by default on purpose. Turning it on routes every notification on
+    /// the desktop through ra and asks whatever daemon is already running to
+    /// stand down; if ra then stops, notifications go nowhere until it returns.
+    /// See `src/service/notification.rs` for the full trade-off.
+    #[serde(default)]
+    pub notification_daemon: bool,
 }
 
 fn default_true() -> bool {
@@ -411,6 +422,8 @@ impl Default for QuickSettings {
             anchor: default_anchor(),
             gap: default_gap(),
             tiles: default_tiles(),
+            notifications: true,
+            notification_daemon: false,
             volume: true,
             brightness: true,
             microphone: true,

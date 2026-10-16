@@ -670,6 +670,7 @@ impl QuickSettings {
                         let Some(me) = weak.upgrade() else { return };
                         let next = !me.persist.get_bool(state::KEY_DND, false);
                         me.persist.set_bool(state::KEY_DND, next);
+                        crate::service::notification::get().set_dnd(next);
                         me.refresh();
                     }
                 });

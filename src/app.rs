@@ -109,6 +109,7 @@ pub fn run(explicit_config: Option<PathBuf>, mode: Mode) -> i32 {
     qs.apply_poll_interval(config.quick_settings.poll_interval_ms);
 
     panel::warm_services(&config);
+    crate::service::notification::install(config.quick_settings.notification_daemon);
 
     let monitors = current_monitors();
     *windows.borrow_mut() = panel::build_all(&app, &config, &monitors).borrow().clone();
@@ -139,6 +140,7 @@ pub fn run(explicit_config: Option<PathBuf>, mode: Mode) -> i32 {
         Rc::new(move |config: Config, reason: &str| {
             theme::install(&config.style);
             panel::warm_services(&config);
+    crate::service::notification::install(config.quick_settings.notification_daemon);
             let monitors = current_monitors();
             let fresh = panel::build_all(&app, &config, &monitors);
             qs.set_anchor_offset(panel::anchor_offset(&config.panels, config.quick_settings.anchor));

@@ -84,6 +84,29 @@ impl Bus {
         Ok(Self { conn })
     }
 
+    /// The underlying connection, for exporting an interface of our own.
+    pub fn connection(&self) -> &gio::DBusConnection {
+        &self.conn
+    }
+
+    /// Take ownership of `name`, replacing any current owner.
+    ///
+    /// `REPLACE` rather than `ALLOW_REPLACEMENT` plus a handshake, because a
+    /// notification daemon that waits to be asked politely is a notification
+    /// daemon that ends up owning nothing: the incumbent was started first and
+    /// has no reason to yield. The incumbent's name-loss handler is what lets
+    /// it stand down cleanly, and callers here watch that to report the
+    /// situation rather than to retry.
+    pub fn take_name(&self, name: &str, on_lost: impl Fn() + 'static) -> gio::OwnerId {
+        gio::bus_own_name_on_connection(
+            &self.conn,
+            name,
+            gio::BusNameOwnerFlags::REPLACE,
+            |_, _| {},
+            move |_, _| on_lost(),
+        )
+    }
+
     /// True when `name` currently has an owner on this bus.
     pub fn name_has_owner(&self, name: &str) -> bool {
         self.conn
