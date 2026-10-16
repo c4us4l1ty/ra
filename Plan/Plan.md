@@ -230,3 +230,7 @@ IMPORTANT THINGS:
 7. Main techstack is RUST - You can decide other languages that fit for the project as well as the GTK theme.
 8. I will likely have 2 of these panels, one at the top as you see in the images in the UI plan folder and one at the bottom that will be my app dock. (SO it MUST be super customizable)
 9. You can see wayle and quick-settings-manager to copy code or take from them.
+10. I dont want heavy dependencies, keep the dependencies as low as possible.
+11. every possible edge case must be considered and this - should be converted to true A+++ grade. The goal for this is to use absolute near 0 CPU usage and with good security. Battle test this so thoroughly and push Rust to its absolute limits.
+12. I need absolute near 0% CPU/RAM being used by this.
+13. i want the workflow to be (clone the repo c4us4l1ty/ra - this repo. and execute a install.sh script, then i will remove the XFCE panels, and start using this panel. NO XFCE panel extensions.
