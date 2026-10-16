@@ -32,6 +32,7 @@ const IFACE_DEVICE: &str = "org.freedesktop.NetworkManager.Device";
 const IFACE_WIFI: &str = "org.freedesktop.NetworkManager.Device.Wireless";
 const IFACE_AP: &str = "org.freedesktop.NetworkManager.AccessPoint";
 const IFACE_SETTINGS: &str = "org.freedesktop.NetworkManager.Settings";
+const IFACE_CONN: &str = "org.freedesktop.NetworkManager.Settings.Connection";
 
 /// `DeviceType` values that matter to a panel.
 const DEVICE_TYPE_WIFI: u32 = 2;
@@ -302,17 +303,12 @@ impl Network {
         self.emitter.subscribe(f)
     }
 
-    pub fn is_available(&self) -> bool {
-        self.bus.is_some()
-    }
-
     // -- actions ------------------------------------------------------------
 
     /// Turn the Wi-Fi radio on or off.
     pub fn set_wifi_enabled(&self, enabled: bool) {
         let Some(bus) = &self.bus else { return };
-        let body = glib::Variant::tuple_from_iter([&IFACE.to_variant(), &"WirelessEnabled".to_variant(), &enabled.to_variant()]);
-        bus.call_no_reply(BUS, ROOT, dbus::PROPERTIES, "Set", Some(&body));
+        bus.set_no_reply(BUS, ROOT, IFACE, "WirelessEnabled", &enabled.to_variant());
     }
 
     /// Ask NetworkManager to rescan. NM rate-limits this and may refuse, which
@@ -544,9 +540,12 @@ async fn load_saved(bus: Bus, weak: Weak<Network>) {
 
     let mut map = HashMap::with_capacity(conns.len());
     for conn in conns {
-        let Ok(settings) = bus.call(BUS, &conn, IFACE_SETTINGS, "GetSettings", None).await else { continue };
+        // `GetSettings` is on the connection object, under the *Connection*
+        // interface - not the Settings interface the object list came from.
+        let Ok(settings) = bus.call(BUS, &conn, IFACE_CONN, "GetSettings", None).await else { continue };
         let Some(settings) = settings else { continue };
-        let settings = dbus::variant_to_dict(settings);
+        // One-element tuple around the `a{sa{sv}}` map.
+        let settings = dbus::variant_to_dict(dbus::reply_value(settings));
         let Some(wireless) = settings.get("802-11-wireless") else { continue };
         let wireless = dbus::variant_to_dict(wireless.clone());
         let Some(ssid) = wireless.get("ssid").and_then(dbus::as_bytes_str) else { continue };

@@ -176,8 +176,4 @@ impl PopupAnchor {
     pub fn is_bottom(self) -> bool {
         matches!(self, PopupAnchor::BottomRight | PopupAnchor::BottomLeft | PopupAnchor::BottomCenter)
     }
-
-    pub fn is_center(self) -> bool {
-        matches!(self, PopupAnchor::TopCenter | PopupAnchor::BottomCenter)
-    }
 }

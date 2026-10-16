@@ -44,7 +44,11 @@ pub struct AudioState {
     pub available: bool,
     /// 0-100.
     pub volume: u8,
+    /// Sink mute.
     pub muted: bool,
+    /// Source (microphone) mute. Tracked separately because a machine can be
+    /// listening through a muted microphone while playing sound normally.
+    pub source_muted: bool,
     pub sinks: Vec<AudioDevice>,
     pub sources: Vec<AudioDevice>,
     pub default_sink: Option<u32>,
@@ -74,6 +78,7 @@ impl AudioState {
         format!("{}%", self.volume)
     }
 
+    /// Description of the default sink, if we know it.
     pub fn default_sink_description(&self) -> Option<&str> {
         let id = self.default_sink?;
         self.sinks.iter().find(|s| s.id == id).map(|s| s.description.as_str())
@@ -235,11 +240,18 @@ impl Audio {
         spawn_refresh(&Rc::downgrade(self));
     }
 
-    /// Sources use a `@DEFAULT_AUDIO_SOURCE@`-style target with the node id
-    /// prefixed by the `id@` special target syntax WirePlumber defines.
+    /// Sources use WirePlumber's `id@DEFAULT_AUDIO_SINK@` target syntax, where
+    /// the node id is prefixed to a special target name.
     pub fn set_default_source(self: &Rc<Self>, id: u32) {
         run(&["set-default", &format!("{id}@DEFAULT_AUDIO_SINK@")]);
         spawn_refresh(&Rc::downgrade(self));
+    }
+
+    /// Mute or unmute the default source, returning the new state.
+    pub fn toggle_source_mute(self: &Rc<Self>) -> bool {
+        let muted = !self.state.borrow().muted;
+        self.set_source_muted(muted);
+        muted
     }
 
     pub fn set_source_muted(self: &Rc<Self>, muted: bool) {
@@ -280,12 +292,14 @@ fn read_state() -> AudioState {
         return AudioState::default();
     };
     let (sinks, sources) = parse_status(&status);
-    let (volume, muted) = volume_of();
+    let (volume, muted) = volume_of(DEFAULT_SINK);
+    let (_, source_muted) = volume_of(DEFAULT_SOURCE);
 
     AudioState {
         available: true,
         volume,
         muted,
+        source_muted,
         default_sink: sinks.iter().find(|d| d.is_default).map(|d| d.id),
         default_source: sources.iter().find(|d| d.is_default).map(|d| d.id),
         sinks,
@@ -293,14 +307,14 @@ fn read_state() -> AudioState {
     }
 }
 
-/// Read the default sink's level from `wpctl get-volume`.
+/// Read a node's level and mute flag from `wpctl get-volume <target>`.
 ///
 /// Output is `Volume: 0.42 [MUTED]`, though the factor is printed as a
 /// percentage for some node types. Both forms are accepted; a linear factor is
 /// converted with exactly the inverse of what `set-volume` sends, so a
 /// set/get round trip cannot drift.
-fn volume_of() -> (u8, bool) {
-    let Some(out) = run(&["get-volume", DEFAULT_SINK]) else {
+fn volume_of(target: &str) -> (u8, bool) {
+    let Some(out) = run(&["get-volume", target]) else {
         return (0, false);
     };
     let muted = out.to_ascii_lowercase().contains("[muted]");

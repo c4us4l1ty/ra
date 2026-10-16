@@ -20,7 +20,7 @@ use gtk4::glib;
 use gtk4::prelude::*;
 
 use crate::future::oneshot;
-use crate::{debug, error, warn};
+use crate::{debug, warn};
 
 /// Errors that can happen while talking to D-Bus.
 #[derive(Debug)]
@@ -68,29 +68,20 @@ pub const DBUS_PATH: &str = "/org/freedesktop/DBus";
 #[derive(Clone)]
 pub struct Bus {
     conn: gio::DBusConnection,
-    system: bool,
 }
 
 impl Bus {
     /// Connect to the per-user session bus.
     pub fn session() -> Result<Self> {
         let conn = gio::bus_get_sync(gio::BusType::Session, None::<&gio::Cancellable>).map_err(Error::Bus)?;
-        Ok(Self { conn, system: false })
+        Ok(Self { conn })
     }
 
     /// Connect to the system bus. NetworkManager, BlueZ, UPower, logind and
     /// power-profiles all live here.
     pub fn system() -> Result<Self> {
         let conn = gio::bus_get_sync(gio::BusType::System, None::<&gio::Cancellable>).map_err(Error::Bus)?;
-        Ok(Self { conn, system: true })
-    }
-
-    pub fn is_system(&self) -> bool {
-        self.system
-    }
-
-    pub fn connection(&self) -> &gio::DBusConnection {
-        &self.conn
+        Ok(Self { conn })
     }
 
     /// True when `name` currently has an owner on this bus.
@@ -174,6 +165,28 @@ impl Bus {
         })
     }
 
+    /// Invoke a method synchronously.
+    ///
+    /// Only for one-shot CLI paths such as `ra --toggle`, where there is no
+    /// main loop to run while waiting. Long-lived code must use [`Bus::call`]
+    /// so the main loop is never blocked.
+    pub fn call_blocking(&self, dest: &str, path: &str, iface: &str, method: &str, body: Option<&glib::Variant>) -> Result<()> {
+        self.conn
+            .call_sync(
+                Some(dest),
+                path,
+                iface,
+                method,
+                body,
+                None,
+                gio::DBusCallFlags::NONE,
+                -1,
+                None::<&gio::Cancellable>,
+            )
+            .map(|_| ())
+            .map_err(Error::Call)
+    }
+
     /// Invoke a method and ignore the reply. Fire-and-forget for things like
     /// toggles, where we rely on the resulting `PropertiesChanged` to update
     /// the UI rather than on the return value.
@@ -214,11 +227,13 @@ impl Bus {
             let reply = fut
                 .await?
                 .ok_or_else(|| glib::Error::new(gio::DBusError::Failed, "GetAll returned no reply"))?;
-            Ok(variant_to_dict(reply))
+            // `GetAll` is declared `-> a{sv}`, so the reply wraps the map in a
+            // one-element tuple. See `reply_value`.
+            Ok(variant_to_dict(reply_value(reply)))
         })
     }
 
-    /// `org.freedesktop.DBus.Properties.Get` -> a single (unwrapped) value.
+    /// `org.freedesktop.DBus.Properties.Get` -> a single value, unwrapped.
     pub fn get(&self, dest: &str, path: &str, iface: &str, prop: &str) -> CallFuture<glib::Variant> {
         let body = glib::Variant::tuple_from_iter([&iface.to_variant(), &prop.to_variant()]);
         let owner = format!("{iface}.{prop}");
@@ -227,19 +242,16 @@ impl Bus {
             let reply = fut
                 .await?
                 .ok_or_else(|| glib::Error::new(gio::DBusError::Failed, &format!("no value for {owner}")))?;
-            // `Get` returns a variant-of-variant; `unwrap` strips one level.
-            Ok(unwrap(&reply))
+            // `Get` is declared `-> v`, so the reply is a one-element tuple
+            // holding the value, itself wrapped in a variant. Two levels.
+            Ok(unwrap(&reply_value(reply)))
         })
     }
 
-    /// `org.freedesktop.DBus.Properties.Set`.
-    pub fn set(&self, dest: &str, path: &str, iface: &str, prop: &str, value: &glib::Variant) -> CallFuture<()> {
+    /// `org.freedesktop.DBus.Properties.Set`, ignoring the reply.
+    pub fn set_no_reply(&self, dest: &str, path: &str, iface: &str, prop: &str, value: &glib::Variant) {
         let body = glib::Variant::tuple_from_iter([&iface.to_variant(), &prop.to_variant(), value]);
-        let fut = self.call(dest, path, PROPERTIES, "Set", Some(&body));
-        Box::pin(async move {
-            fut.await?;
-            Ok(())
-        })
+        self.call_no_reply(dest, path, PROPERTIES, "Set", Some(&body));
     }
 
     /// Subscribe to a signal. `None` in any matching position matches anything.
@@ -281,11 +293,6 @@ impl Bus {
         )
     }
 
-    /// Log the reply for a failed call, distinguishing "not installed" from a
-    /// genuine error so the log stays readable.
-    pub fn explain(&self, what: &str, e: &Error) {
-        error!("{what}: {e}");
-    }
 }
 
 fn debug_dbus_error(dest: &str, path: &str, method: &str, e: &glib::Error) {
@@ -312,9 +319,15 @@ fn debug_dbus_error(dest: &str, path: &str, method: &str, e: &glib::Error) {
 /// property bags and `a{oa{sa{sv}}}` ObjectManager payloads (the values stay
 /// variants, only the two-column entries are unpacked).
 pub fn variant_to_dict(v: glib::Variant) -> HashMap<String, glib::Variant> {
+    if !v.is_container() {
+        return HashMap::new();
+    }
     let mut out = HashMap::with_capacity(v.n_children());
     for child in v.iter() {
-        if child.n_children() != 2 {
+        // Dict entries are two-column. Anything else - a bare array handed in
+        // by mistake, an empty tuple - is skipped rather than crashing the
+        // panel: a malformed reply should degrade, never take the process down.
+        if !child.is_container() || child.n_children() != 2 {
             continue;
         }
         if let Some(key) = child.child_value(0).get::<String>() {
@@ -360,10 +373,6 @@ pub fn as_u32(v: &glib::Variant) -> Option<u32> {
     unwrap(v).get::<u32>()
 }
 
-pub fn as_i32(v: &glib::Variant) -> Option<i32> {
-    unwrap(v).get::<i32>()
-}
-
 pub fn as_u8(v: &glib::Variant) -> Option<u8> {
     unwrap(v).get::<u8>()
 }
@@ -372,9 +381,30 @@ pub fn as_f64(v: &glib::Variant) -> Option<f64> {
     unwrap(v).get::<f64>()
 }
 
-/// Read an `as` (array of strings).
+/// Unwrap a single-valued method reply.
+///
+/// D-Bus method replies are *always* tuples. A method declared `-> ao` replies
+/// with a one-element tuple **around** the array, so handing the reply straight
+/// to a reader yields a tuple whose single element is the array - which parses
+/// as an empty string list rather than as an error. That failure mode is
+/// silent, so every reply reader goes through here.
+///
+/// A reply with more than one element is returned untouched, for the methods
+/// that genuinely return several values.
+pub fn reply_value(v: glib::Variant) -> glib::Variant {
+    if v.is_container() && v.n_children() == 1 {
+        v.child_value(0)
+    } else {
+        v
+    }
+}
+
+/// Read an `as` (array of strings), accepting both a bare array and a
+/// single-element tuple wrapping one.
 pub fn as_strv(v: &glib::Variant) -> Vec<String> {
-    unwrap(v).iter().filter_map(|c| c.str().map(str::to_string)).collect()
+    let value = unwrap(v);
+    let value = reply_value(value);
+    value.iter().filter_map(|c| c.str().map(str::to_string)).collect()
 }
 
 /// Decode an `ay`/`az` (byte array) as UTF-8, the way NetworkManager encodes
@@ -413,14 +443,12 @@ type Handler<T> = Box<dyn Fn(&T)>;
 /// dropping the subscription detaches the handler without needing to mutate
 /// the handler list while it is being iterated.
 struct Slot<T> {
-    id: u64,
     alive: Rc<Cell<bool>>,
     handler: Handler<T>,
 }
 
 struct Registry<T> {
     slots: RefCell<Vec<Slot<T>>>,
-    next_id: Cell<u64>,
 }
 
 /// A signal source that services emit state through and widgets subscribe to.
@@ -441,7 +469,7 @@ impl Drop for Subscription {
 
 impl<T: 'static> Emitter<T> {
     pub fn new() -> Self {
-        Self { registry: Rc::new(Registry { slots: RefCell::new(Vec::new()), next_id: Cell::new(0) }) }
+        Self { registry: Rc::new(Registry { slots: RefCell::new(Vec::new()) }) }
     }
 
     pub fn emit(&self, value: &T) {
@@ -467,17 +495,9 @@ impl<T: 'static> Emitter<T> {
     where
         F: Fn(&T) + 'static,
     {
-        let id = self.registry.next_id.get().wrapping_add(1);
-        self.registry.next_id.set(id);
         let alive = Rc::new(Cell::new(true));
-        self.registry.slots.borrow_mut().push(Slot { id, alive: alive.clone(), handler: Box::new(handler) });
+        self.registry.slots.borrow_mut().push(Slot { alive: alive.clone(), handler: Box::new(handler) });
         Subscription { alive }
-    }
-
-    /// Number of live subscribers. Used by tests to prove that tearing a panel
-    /// down actually releases its handlers.
-    pub fn subscriber_count(&self) -> usize {
-        self.registry.slots.borrow().iter().filter(|s| s.alive.get()).count()
     }
 }
 

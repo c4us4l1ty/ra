@@ -17,7 +17,6 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
 use gtk4::gio;
-use gtk4::glib;
 use gtk4::prelude::ToVariant;
 
 use crate::dbus::{self, Bus, Emitter, Subscription};
@@ -173,8 +172,7 @@ impl Bluetooth {
     pub fn set_powered(&self, on: bool) {
         let Some(bus) = &self.bus else { return };
         for path in self.adapters.borrow().iter() {
-            let body = glib::Variant::tuple_from_iter([&IFACE_ADAPTER.to_variant(), &"Powered".to_variant(), &on.to_variant()]);
-            bus.call_no_reply(BUS, path, dbus::PROPERTIES, "Set", Some(&body));
+            bus.set_no_reply(BUS, path, IFACE_ADAPTER, "Powered", &on.to_variant());
         }
     }
 
@@ -202,13 +200,13 @@ impl Bluetooth {
         let Ok(objects) = bus.call(BUS, ROOT_PATH, dbus::OBJECT_MANAGER, "GetManagedObjects", None).await else {
             return Vec::new();
         };
-        let Some(objects) = objects else { return Vec::new() };
+        // The reply is a one-element tuple around the object map.
+        let Some(objects) = objects.map(dbus::reply_value) else { return Vec::new() };
 
         let mut out = Vec::new();
         for entry in objects.iter() {
             let path = entry.child_value(0).get::<String>().unwrap_or_default();
-            let ifaces = entry.child_value(1);
-            let device_props = dbus::variant_to_dict(ifaces.child_value(1)).get(IFACE_DEVICE).cloned();
+            let device_props = dbus::variant_to_dict(entry.child_value(1)).get(IFACE_DEVICE).cloned();
             let Some(props) = device_props else { continue };
             let props = dbus::variant_to_dict(props);
             let address = props.get("Address").and_then(dbus::as_str).unwrap_or_default();
@@ -244,7 +242,7 @@ async fn reload(weak: Weak<Bluetooth>) {
         me.replace_state(BluetoothState::default());
         return;
     };
-    let Some(objects) = objects else {
+    let Some(objects) = objects.map(dbus::reply_value) else {
         me.replace_state(BluetoothState::default());
         return;
     };
@@ -257,9 +255,10 @@ async fn reload(weak: Weak<Bluetooth>) {
 
     for entry in objects.iter() {
         let path = entry.child_value(0).get::<String>().unwrap_or_default();
+        // `entry` is `{oa{sa{sv}}}`: the path, then the interface map.
         let ifaces = entry.child_value(1);
 
-        if let Some(adapter) = dbus::variant_to_dict(ifaces.child_value(1)).get(IFACE_ADAPTER).cloned() {
+        if let Some(adapter) = dbus::variant_to_dict(ifaces.clone()).get(IFACE_ADAPTER).cloned() {
             adapters.push(path);
             let adapter = dbus::variant_to_dict(adapter);
             powered |= adapter.get("Powered").and_then(dbus::as_bool).unwrap_or(false);
@@ -267,7 +266,7 @@ async fn reload(weak: Weak<Bluetooth>) {
             continue;
         }
 
-        if let Some(device) = dbus::variant_to_dict(ifaces.child_value(1)).get(IFACE_DEVICE).cloned() {
+        if let Some(device) = dbus::variant_to_dict(ifaces.clone()).get(IFACE_DEVICE).cloned() {
             let device = dbus::variant_to_dict(device);
             connected |= device.get("Connected").and_then(dbus::as_bool).unwrap_or(false);
             paired += usize::from(device.get("Paired").and_then(dbus::as_bool).unwrap_or(false));

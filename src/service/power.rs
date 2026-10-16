@@ -19,10 +19,11 @@ use gtk4::glib;
 use gtk4::prelude::ToVariant;
 
 use crate::dbus::{self, Bus, Emitter, Subscription};
-use crate::{debug, warn};
+use crate::{debug, info, warn};
 
 const UPOWER: &str = "org.freedesktop.UPower";
 const UPOWER_PATH: &str = "/org/freedesktop/UPower";
+const IFACE_UPOWER: &str = "org.freedesktop.UPower";
 const UPOWER_DEVICE: &str = "org.freedesktop.UPower.Device";
 
 const HADESS: &str = "net.hadess.PowerProfiles";
@@ -186,9 +187,12 @@ impl Power {
         let Some(bus) = self.bus.clone() else { return };
         let mut subs = Vec::new();
 
-        // Battery hotplug: UPower lists every power device under its root.
-        for member in ["InterfacesAdded", "InterfacesRemoved"] {
-            subs.push(bus.subscribe(Some(UPOWER), Some(dbus::OBJECT_MANAGER), Some(member), Some(UPOWER_PATH), {
+        // Battery hotplug. UPower does *not* export an ObjectManager at its root
+        // (that call is denied by polkit); it lists its devices through
+        // `EnumerateDevices` and announces changes with `DeviceAdded` /
+        // `DeviceRemoved` on `org.freedesktop.UPower` itself.
+        for member in ["DeviceAdded", "DeviceRemoved"] {
+            subs.push(bus.subscribe(Some(UPOWER), Some(IFACE_UPOWER), Some(member), Some(UPOWER_PATH), {
                 let weak = Rc::downgrade(self);
                 let bus = bus.clone();
                 move |_| crate::dbus::spawn(find_battery(bus.clone(), weak.clone()))
@@ -358,6 +362,23 @@ impl Power {
         self.call_logind("Suspend");
     }
 
+    /// End this session.
+    ///
+    /// logind cannot end a graphical session on its own, so this goes through
+    /// XFCE's own mechanism: xfce4-session is the one component that knows
+    /// which applications have to be asked to save first, which is exactly why
+    /// it beats killing the session bus or the display manager.
+    pub fn logout(&self) {
+        let argv: Vec<&std::ffi::OsStr> = ["xfce4-session-logout", "--logout"]
+            .iter()
+            .map(std::ffi::OsStr::new)
+            .collect();
+        match gtk4::gio::Subprocess::newv(&argv, gtk4::gio::SubprocessFlags::NONE) {
+            Ok(_) => info!("logout requested"),
+            Err(e) => warn!("logout: {e}"),
+        }
+    }
+
     fn call_logind(&self, method: &str) {
         let Some(bus) = &self.bus else { return };
         // `interactive = false`: the user already confirmed in the panel, and a
@@ -367,39 +388,58 @@ impl Power {
     }
 }
 
+/// Find the battery to follow.
+///
+/// UPower lists every power device through `EnumerateDevices`, but it does not
+/// consistently expose a way to tell them apart: `org.freedesktop.UPower.Device`
+/// carries `Type` on older versions and dropped it on 1.91, where the only
+/// reliable discriminator left is UPower's own naming convention - a battery is
+/// `/org/freedesktop/UPower/devices/battery_<id>`, a mains adapter is
+/// `line_power_<id>`.
+///
+/// So: prefer the path convention, and fall back to `Type` for the versions
+/// that still report it. Either way this is one round trip per candidate, run
+/// only when the device set changes.
 async fn find_battery(bus: Bus, weak: Weak<Power>) {
     let Some(me) = weak.upgrade() else { return };
-    let Ok(objects) = bus.call(UPOWER, UPOWER_PATH, dbus::OBJECT_MANAGER, "GetManagedObjects", None).await else {
-        me.set_battery(BatteryState::default());
-        return;
-    };
-    let Some(objects) = objects else {
-        me.set_battery(BatteryState::default());
-        return;
+    let listed = bus.call(UPOWER, UPOWER_PATH, IFACE_UPOWER, "EnumerateDevices", None).await;
+    let paths = match listed {
+        // `EnumerateDevices` replies with a one-element tuple around the array.
+        Ok(Some(reply)) => dbus::as_strv(&reply),
+        _ => {
+            *me.battery_path.borrow_mut() = None;
+            me.set_battery(BatteryState::default());
+            return;
+        }
     };
 
-    // Prefer the main battery; fall back to the first one that claims to be
-    // present. `Battery1`/`Device` both carry the properties we need.
+    // Fast path: the naming convention needs no extra round trips.
+    let named: Vec<String> = paths
+        .iter()
+        .filter(|p| p.rsplit('/').next().is_some_and(|name| name.starts_with("battery_")))
+        .cloned()
+        .collect();
+    if let Some(main) = named
+        .iter()
+        .find(|p| p.contains("BAT0"))
+        .or_else(|| named.first())
+        .cloned()
+    {
+        *me.battery_path.borrow_mut() = Some(main);
+        refresh_battery(bus, weak).await;
+        return;
+    }
+
+    // Slow path for a UPower that names devices differently.
     let mut fallback = None;
-    for entry in objects.iter() {
-        let path = entry.child_value(0).get::<String>().unwrap_or_default();
-        let props = dbus::variant_to_dict(entry.child_value(1)).get(UPOWER_DEVICE).cloned();
-        let Some(props) = props else { continue };
-        let props = dbus::variant_to_dict(props);
-        let is_battery = props.get("Type").and_then(dbus::as_str).as_deref() == Some("Battery")
-            || dbus::variant_to_dict(entry.child_value(1)).contains_key("org.freedesktop.UPower.Device");
-        if !is_battery {
-            continue;
-        }
-        if path.contains("BAT") || path.ends_with("battery_BAT0") {
-            *me.battery_path.borrow_mut() = Some(path);
+    for path in paths {
+        let Ok(props) = bus.get_all(UPOWER, &path, UPOWER_DEVICE).await else { continue };
+        if props.get("Type").and_then(dbus::as_str).as_deref() == Some("Battery") {
+            fallback = Some(path);
             break;
         }
-        fallback.get_or_insert(path);
     }
-    if me.battery_path.borrow().is_none() {
-        *me.battery_path.borrow_mut() = fallback;
-    }
+    *me.battery_path.borrow_mut() = fallback;
     refresh_battery(bus, weak).await;
 }
 
@@ -453,37 +493,61 @@ async fn refresh_profiles(bus: Bus, weak: Weak<Power>) {
         return;
     };
 
-    // power-profiles-daemon exposes `Profiles` as a{ss} (key -> description);
-    // UPower exposes it as `as`. Normalise to a stable list of labels.
-    let profiles = match props.get("Profiles") {
-        Some(v) => {
-            let inner = dbus::unwrap(v);
-            if inner.type_().is_subtype_of(glib::VariantTy::DICTIONARY) {
-                // power-profiles-daemon exposes `a{ss}` (key -> description).
-                let mut entries: Vec<(String, String)> = inner
-                    .iter()
-                    .filter_map(|e| {
-                        let key = e.child_value(0).get::<String>()?;
-                        let label = e.child_value(1).get::<String>().unwrap_or_else(|| key.clone());
-                        Some((key, label))
-                    })
-                    .collect();
-                // Sort by key so the tile order is stable across reads; the
-                // daemon's own ordering is not guaranteed.
-                entries.sort();
-                entries.into_iter().map(|(key, _)| key).collect()
-            } else {
-                dbus::as_strv(&inner)
-            }
-        }
-        None => Vec::new(),
-    };
+    let profiles = parse_profiles(props.get("Profiles"));
 
     me.set_profile(ProfileState {
         available: !profiles.is_empty(),
         profiles,
         active: props.get("ActiveProfile").and_then(dbus::as_str),
     });
+}
+
+/// Normalise `Profiles` into a list of profile names, whatever shape the daemon
+/// reports.
+///
+/// Verified against both implementations in the wild, because they disagree:
+///
+/// * `net.hadess.PowerProfiles` (power-profiles-daemon 0.20+) sends
+///   `aa{sv}`, an array of dicts each carrying a `Profile` key plus driver
+///   metadata.
+/// * older `net.hadess.PowerProfiles` sent `a{ss}` (name -> description).
+/// * `org.freedesktop.UPower.PowerProfiles` sends `as`.
+///
+/// The array-of-dicts shape is the trap: read as a dictionary it yields garbage
+/// keys like `"Profile"`, so a naive parser produces a tile that switches
+/// nothing.
+fn parse_profiles(value: Option<&glib::Variant>) -> Vec<String> {
+    let Some(raw) = value else { return Vec::new() };
+    let value = dbus::unwrap(raw);
+
+    let mut names: Vec<String> = Vec::new();
+
+    // `aa{sv}`: each element is a dict whose `Profile` value is the name.
+    if value.type_().is_subtype_of(glib::VariantTy::ARRAY) {
+        for element in value.iter() {
+            let inner = dbus::unwrap(&element);
+            if inner.type_().is_subtype_of(glib::VariantTy::DICTIONARY) {
+                let dict = dbus::variant_to_dict(inner);
+                if let Some(name) = dict.get("Profile").and_then(dbus::as_str) {
+                    names.push(name);
+                    continue;
+                }
+                // `a{ss}`: key is the name, value the description.
+                for (key, label) in &dict {
+                    let _ = label;
+                    names.push(key.clone());
+                }
+            } else if let Some(name) = inner.get::<String>() {
+                names.push(name);
+            }
+        }
+    }
+
+    // Sorted so the cycling tile has a stable order across reads; neither
+    // daemon guarantees an order, and a tile that jumps around is unusable.
+    names.sort();
+    names.dedup();
+    names
 }
 
 async fn query_actions(bus: Bus, weak: Weak<Power>) {

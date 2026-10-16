@@ -1,1 +1,121 @@
-# ra — placeholder; replaced by the shipped default configuration.
+# ra — panel configuration
+#
+# This file is watched: save it and the panel rebuilds itself. A syntax error
+# is reported in the log and the previous configuration stays in place, so a
+# half-typed line can never blank your bar.
+#
+# Documentation for every key: `ra --diagnose` lists the modules this build
+# understands, and the README covers the rest.
+
+[general]
+# Reload the config when this file changes.
+watch_config = true
+# Close the quick settings when it loses keyboard focus.
+close_popup_on_blur = true
+# Editors write in bursts; wait this long for the file to settle.
+reload_debounce_ms = 200
+# Report an unknown module as an error rather than a warning.
+strict_modules = true
+
+[style]
+# Re-derive colours when the GTK theme changes. Leave this on: you switch
+# themes often, and every colour in the built-in stylesheet is a GTK named
+# colour, so the panel re-colours itself with no extra work.
+follow_gtk_theme = true
+# Force an accent colour instead of using the theme's. Accepts #rgb, #rrggbb
+# and #rrggbbaa.
+# accent = "#3584e4"
+# Background opacity, 0.0 to 1.0.
+# opacity = 0.94
+# Extra CSS appended after the built-in stylesheet. Your rules win.
+# stylesheet = "~/.config/ra/style.css"
+
+[quick_settings]
+enabled = true
+width = 380
+# Where the popup sits: top-right, top-left, top-center, bottom-right,
+# bottom-left, bottom-center.
+anchor = "top-right"
+# Gap between the panel and the popup.
+gap = 8
+# Tiles, in display order, two per row. Remove one to remove it entirely.
+tiles = [
+    "network",
+    "bluetooth",
+    "power-profile",
+    "night-light",
+    "dark-style",
+    "do-not-disturb",
+    "airplane",
+    "microphone",
+]
+# Slider rows.
+volume = true
+brightness = true
+microphone = true
+# Fallback interval for values the kernel offers no change signal for
+# (brightness). 0 disables it; the slider still works.
+poll_interval_ms = 1000
+
+# --------------------------------------------------------------------------
+# The top bar.
+# --------------------------------------------------------------------------
+[[panel]]
+name = "top"
+# "first" (the first output GDK reports), "all", or a connector name such as
+# "eDP-1".
+monitor = "first"
+edge = "top"
+layer = "top"
+height = 34
+# Reserve screen space so maximised windows do not hide behind the bar.
+exclusive = true
+margin = { top = 0, bottom = 0, left = 0, right = 0 }
+# Gap between widgets.
+spacing = 2
+
+# A slot is a module name, a module with options, or a named group.
+# `class` adds CSS classes; a group's `name` becomes its CSS id.
+
+left = [
+    { module = "launcher", args = { icon = "view-app-grid-symbolic" } },
+]
+
+center = [
+    { module = "clock", args = { format = "%a %d %b  %H:%M", tooltip = "%A, %d %B %Y" } },
+]
+
+right = [
+    { name = "status", class = "ra-status", modules = ["network", "bluetooth", "volume", "battery"] },
+]
+
+# --------------------------------------------------------------------------
+# The bottom dock.
+# --------------------------------------------------------------------------
+[[panel]]
+name = "dock"
+monitor = "first"
+edge = "bottom"
+layer = "top"
+height = 54
+exclusive = true
+margin = { top = 0, bottom = 0, left = 0, right = 0 }
+spacing = 6
+
+center = [
+    # The dock. Add, remove or reorder entries freely; `custom` runs any
+    # program you like and shows its first line of output.
+    {
+        name = "dock",
+        class = "ra-dock",
+        modules = [
+            { module = "custom", args = { command = "uptime", interval = 30 } },
+            { module = "separator" },
+            { module = "label", args = { text = "XFCE / labwc" } },
+        ],
+    },
+]
+
+# Reusable sections. Reference one from a panel with "@name".
+# [include]
+# indicators = ["network", "volume", "battery"]

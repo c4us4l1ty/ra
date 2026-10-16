@@ -1,0 +1,307 @@
+/* ra — built-in stylesheet
+ *
+ * Colours are written as GTK named colours wherever possible. GTK resolves
+ * those against whatever theme is active, so the panel follows a theme change
+ * with no extra work and no file watching: switch XFCE's GTK theme and the bar,
+ * the tiles and the popup all re-colour themselves.
+ *
+ * Only the *shape* is defined here — radii, spacing, borders, opacity. That
+ * separation is what makes a light/dark switch work without the panel
+ * hard-coding a palette that would fight the user's theme.
+ */
+
+/* ---------------------------------------------------------------- panels -- */
+
+window.ra-panel {
+  background-color: transparent;
+  color: @window_fg_color;
+}
+
+/* The visible bar surface. `.ra-solid` is used where the compositor does not
+ * give us the option of letting the desktop show through. */
+.ra-panel-surface {
+  background-color: alpha(@window_bg_color, 0.92);
+  border-bottom: 1px solid alpha(@borders, 0.75);
+}
+
+.ra-panel-edge-bottom .ra-panel-surface {
+  border-bottom: none;
+  border-top: 1px solid alpha(@borders, 0.75);
+}
+
+.ra-panel-edge-left .ra-panel-surface {
+  border-bottom: none;
+  border-right: 1px solid alpha(@borders, 0.75);
+}
+
+.ra-panel-edge-right .ra-panel-surface {
+  border-bottom: none;
+  border-left: 1px solid alpha(@borders, 0.75);
+}
+
+.ra-panel .ra-section {
+  padding: 0 6px;
+}
+
+/* Sections distribute their children: `left` hugs the start edge, `center`
+ * stays put in the middle, `right` hugs the end edge. */
+.ra-section-center {
+  -gtk-icon-shadow: none;
+}
+
+.ra-section {
+  color: @window_fg_color;
+}
+
+/* ----------------------------------------------------------- bar modules -- */
+
+.ra-bar-button {
+  padding: 0 6px;
+  min-width: 0;
+  min-height: 0;
+  border-radius: 8px;
+  color: @window_fg_color;
+  transition: background-color 120ms ease-out;
+}
+
+.ra-bar-button:hover {
+  background-color: alpha(currentColor, 0.12);
+}
+
+.ra-bar-button:checked {
+  background-color: alpha(@accent_bg_color, 0.35);
+}
+
+.ra-bar-label {
+  padding: 0 6px;
+}
+
+.ra-bar-icon {
+  padding: 0 4px;
+}
+
+.ra-separator {
+  min-width: 1px;
+  margin: 6px 4px;
+  background-color: alpha(@borders, 0.9);
+}
+
+/* --------------------------------------------------------------- popover -- */
+
+window.ra-popup {
+  background-color: transparent;
+  color: @window_fg_color;
+}
+
+.ra-popup-surface {
+  background-color: alpha(@window_bg_color, 0.96);
+  border: 1px solid alpha(@borders, 0.8);
+  border-radius: 16px;
+  padding: 14px;
+  box-shadow: 0 8px 28px alpha(black, 0.28), 0 2px 6px alpha(black, 0.16);
+}
+
+.ra-popup-header {
+  margin-bottom: 12px;
+}
+
+.ra-user-pill {
+  padding: 6px 12px;
+  border-radius: 14px;
+  background-color: alpha(@window_fg_color, 0.08);
+}
+
+.ra-round-button {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border-radius: 15px;
+  background-color: alpha(@window_fg_color, 0.08);
+  color: @window_fg_color;
+  transition: background-color 120ms ease-out;
+}
+
+.ra-round-button:hover {
+  background-color: alpha(@window_fg_color, 0.16);
+}
+
+.ra-round-button:checked {
+  background-color: @accent_bg_color;
+  color: @accent_fg_color;
+}
+
+/* ----------------------------------------------------------------- tiles -- */
+
+.ra-tile {
+  border-radius: 14px;
+  background-color: alpha(@window_fg_color, 0.07);
+  color: @window_fg_color;
+  padding: 0;
+  min-height: 52px;
+  border: 1px solid transparent;
+  transition: background-color 120ms ease-out, border-color 120ms ease-out;
+}
+
+.ra-tile:hover {
+  background-color: alpha(@window_fg_color, 0.13);
+}
+
+.ra-tile:checked,
+.ra-tile.checked {
+  background-color: @accent_bg_color;
+  color: @accent_fg_color;
+}
+
+.ra-tile-title {
+  font-weight: 600;
+}
+
+.ra-tile-subtitle {
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+.ra-tile:checked .ra-tile-subtitle {
+  opacity: 0.9;
+}
+
+.ra-chevron {
+  opacity: 0.6;
+}
+
+/* ---------------------------------------------------------------- slider -- */
+
+.ra-slider-row {
+  padding: 2px 2px 6px 2px;
+}
+
+.ra-slider {
+  min-height: 20px;
+}
+
+.ra-slider trough {
+  min-height: 5px;
+  border-radius: 3px;
+  background-color: alpha(@window_fg_color, 0.18);
+}
+
+.ra-slider trough highlight {
+  border-radius: 3px;
+  background-color: @accent_bg_color;
+}
+
+.ra-slider slider {
+  min-width: 16px;
+  min-height: 16px;
+  border-radius: 50%;
+  background-color: @window_fg_color;
+  border: none;
+  margin: -6px 0;
+  transition: transform 100ms ease-out;
+}
+
+.ra-slider slider:hover {
+  transform: scale(1.12);
+}
+
+.ra-slider-value {
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
+/* ------------------------------------------------------------- sub-pages -- */
+
+.ra-page-header {
+  margin-bottom: 8px;
+}
+
+.ra-page-title {
+  font-weight: 700;
+}
+
+.ra-page-back,
+.ra-page-action {
+  color: @window_fg_color;
+}
+
+.ra-list {
+  background-color: transparent;
+}
+
+.ra-list row {
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.ra-list row:hover {
+  background-color: alpha(@window_fg_color, 0.08);
+}
+
+.ra-list row:selected {
+  background-color: alpha(@accent_bg_color, 0.3);
+}
+
+.ra-list row.connected {
+  background-color: alpha(@accent_bg_color, 0.22);
+}
+
+.ra-empty {
+  padding: 18px 6px;
+  opacity: 0.6;
+}
+
+/* -------------------------------------------------------------- app list -- */
+
+.ra-app-grid {
+  background-color: transparent;
+}
+
+.ra-app {
+  padding: 10px 8px;
+  border-radius: 12px;
+}
+
+.ra-app:hover {
+  background-color: alpha(@window_fg_color, 0.1);
+}
+
+.ra-app-name {
+  font-size: 0.8em;
+}
+
+/* --------------------------------------------------------------- inputs -- */
+
+.ra-entry {
+  padding: 7px 10px;
+  border-radius: 9px;
+  background-color: alpha(@window_fg_color, 0.1);
+  border: 1px solid alpha(@borders, 0.9);
+}
+
+.ra-entry:focus {
+  border-color: @accent_bg_color;
+}
+
+/* --------------------------------------------------------------- scroll -- */
+
+.ra-scroller {
+  background-color: transparent;
+}
+
+.ra-scroller scrollbar {
+  background-color: transparent;
+  min-width: 6px;
+}
+
+.ra-scroller scrollbar slider {
+  min-width: 6px;
+  min-height: 24px;
+  margin: 0;
+  border-radius: 3px;
+  background-color: alpha(@window_fg_color, 0.25);
+  border: none;
+}
+
+.ra-scroller scrollbar slider:hover {
+  background-color: alpha(@window_fg_color, 0.4);
+}

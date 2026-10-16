@@ -482,17 +482,6 @@ impl Default for Config {
     }
 }
 
-/// A config plus the error from the last failed parse, if any.
-///
-/// Keeping the last good config means a typo while saving cannot blank the
-/// panel; the user sees an error in the log and their bar keeps working.
-#[derive(Clone)]
-pub struct Loaded {
-    pub config: Config,
-    pub path: PathBuf,
-    pub error: Option<String>,
-}
-
 /// Push the module names of a group's member list into `out`.
 fn collect_modules(modules: &[ModuleRef], out: &mut Vec<String>) {
     for m in modules {

@@ -9,7 +9,20 @@ pub mod audio;
 pub mod bluetooth;
 pub mod brightness;
 pub mod network;
+pub mod nightlight;
 pub mod power;
+
+/// Start every service, so `availability()` has something to report.
+///
+/// Only used by `--diagnose`, which has no config to warm services from. The
+/// panel itself starts services lazily, so an unused feature costs nothing.
+pub fn warm() {
+    network::get();
+    bluetooth::get();
+    audio::get();
+    brightness::get();
+    power::get();
+}
 
 /// Human-readable availability of every service, for `ra --diagnose`.
 pub fn availability() -> Vec<(&'static str, &'static str)> {

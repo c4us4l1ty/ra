@@ -131,7 +131,16 @@ impl Brightness {
         self.arm();
     }
 
-    fn arm(self: &Rc<Self>) {
+    /// Set the poll interval. Called when the popup opens or closes - an open
+/// popup needs to feel live while dragging, a closed bar does not - and once
+/// at startup from the config.
+pub fn set_poll_interval(self: &Rc<Self>, ms: u32) {
+    let seconds = ms / 1000;
+    self.interval_s.set(seconds.max(if ms > 0 { 1 } else { 0 }));
+    self.arm();
+}
+
+fn arm(self: &Rc<Self>) {
         let mut timer = self.timer.borrow_mut();
         if let Some(id) = timer.take() {
             id.remove();
