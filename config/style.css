@@ -29,23 +29,27 @@ window.ra-panel {
 /* The visible bar surface. `.ra-solid` is used where the compositor does not
  * give us the option of letting the desktop show through. */
 .ra-panel-surface {
-  background-color: alpha(#181818, 0.92);
-  border-bottom: 1px solid alpha(#333333, 0.75);
+
+  background-color: #181818;
+  border-bottom: 1px solid #333333;
 }
 
 .ra-panel-edge-bottom .ra-panel-surface {
   border-bottom: none;
-  border-top: 1px solid alpha(#333333, 0.75);
+
+  border-top: 1px solid #333333;
 }
 
 .ra-panel-edge-left .ra-panel-surface {
   border-bottom: none;
-  border-right: 1px solid alpha(#333333, 0.75);
+
+  border-right: 1px solid #333333;
 }
 
 .ra-panel-edge-right .ra-panel-surface {
   border-bottom: none;
-  border-left: 1px solid alpha(#333333, 0.75);
+
+  border-left: 1px solid #333333;
 }
 
 .ra-panel .ra-section {
@@ -103,8 +107,9 @@ window.ra-popup {
 }
 
 .ra-popup-surface {
-  background-color: alpha(#181818, 0.96);
-  border: 1px solid alpha(#333333, 0.8);
+
+  background-color: #181818;
+  border: 1px solid #333333;
   border-radius: 16px;
   padding: 14px;
   box-shadow: 0 8px 28px alpha(black, 0.28), 0 2px 6px alpha(black, 0.16);
@@ -117,7 +122,8 @@ window.ra-popup {
 .ra-user-pill {
   padding: 6px 12px;
   border-radius: 14px;
-  background-color: alpha(#ffffff, 0.08);
+
+  background-color: #333333;
 }
 
 .ra-round-button {
