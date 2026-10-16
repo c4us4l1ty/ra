@@ -59,7 +59,7 @@ microphone = true
 # go nowhere until it returns. The Do-Not-Disturb tile suppresses what ra shows.
 notification_daemon = false
 # Show the notification list at the bottom of the quick settings (needs daemon).
-notifications = false
+notifications = true
 # Fallback interval for values the kernel offers no change signal for
 # (brightness). 0 disables it; the slider still works.
 poll_interval_ms = 1000

@@ -890,20 +890,7 @@ impl QuickSettings {
         subs.push(service::brightness::get().on_change(repaint(&weak)));
         subs.push(service::nightlight::get(None, None).on_change(repaint(&weak)));
 
-        // Notifications: rebuild whenever the daemon changes state or a new
-        // message arrives, not only when the Notifications page is shown, so
-        // the root-page list stays up-to-date without a manual refresh.
-        let weak = Rc::downgrade(self);
-        subs.push(crate::service::notification::get().on_change({
-            let weak = weak.clone();
-            move |_| {
-                if let Some(me) = weak.upgrade() {
-                    if me.visible.get() {
-                        me.refresh_notifications();
-                    }
-                }
-            }
-        }));
+
 
         // Slider drags emit continuously; coalesce onto an idle so a drag
         // cannot queue hundreds of calls behind the pointer.
